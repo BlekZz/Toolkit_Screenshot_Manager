@@ -9,7 +9,7 @@
 |---|---|---|
 | M0 穩定性與效能修復包 | ✅ 完成 | 2026-07-11 完成，沙箱回歸驗收通過（見 M0 驗收紀錄） |
 | M1 OCR 批次管線 | ✅ 完成 | 2026-07-11 完成，引擎選型 Windows OCR，獨立驗收通過（見 M1 驗收紀錄） |
-| M2 資料夾生命週期指令 | ⬜ 未開始 | |
+| M2 資料夾生命週期指令 | ✅ 完成 | 2026-07-11 完成，獨立驗收通過（見 M2 驗收紀錄） |
 | M3 審閱效率與輸出品質包 | ⬜ 未開始 | |
 
 ## 1. 背景與現況
@@ -104,9 +104,16 @@ QA / 驗收條件：
 - `npm run purge`：trash-candidate 清理，**預設 dry-run**，逾冷靜期（14 天）+ 人工確認才真刪，寫 purge log。archive/originals 可併入、設較長保留期（如 90 天）。
 
 QA / 驗收條件：
-- [ ] status 統計與實際檔案數一致。
-- [ ] requeue 後下次啟動可見回流檔案。
-- [ ] purge dry-run 不動任何檔案；逾期過濾正確；確認後才刪且寫 log。工具永不自動刪 — 刪除永遠是人按最後一下。
+- [x] status 統計與實際檔案數一致。（沙箱 15 項對帳全中；真實環境 Input 1057 / extract-text 36 / keep 45 / review-later 3 / trash 84 / archive 81 與磁碟吻合）
+- [x] requeue 後下次啟動可見回流檔案。（沙箱實測 --apply 後啟動 server，GET /api/session 含全部回流檔）
+- [x] purge dry-run 不動任何檔案；逾期過濾正確；確認後才刪且寫 log。工具永不自動刪。（所有 dry-run 路徑零異動實證；--apply 需 readline 輸入 yes 或 --yes）
+
+### M2 驗收紀錄（2026-07-11）
+
+- 實作：`status.mjs` / `requeue.mjs` / `purge.mjs` + 共用純函式抽至 `lib.mjs`（extract.mjs 同步改用，經機械逐字比對確認零行為變更）。
+- 獨立驗收（fresh-context 沙箱 + 真實環境唯讀比對 1308 檔零異動）✅ 通過。
+- 備註級已知小疵（訊息層級，不修）：purge --apply 遇 stdin EOF 時安全中止但不印訊息；status oldest batch 遇非日期資料夾名可能誤標；requeue 對「只剩非圖片殘留」的批次夾訊息不精確；purge 日期 regex 接受非法日期字串。
+- low-yield 留置在 status 中可見化（顯示 held 數）；實際出口留給 MVP3 vision fallback。
 
 ### M3：審閱效率與輸出品質包
 

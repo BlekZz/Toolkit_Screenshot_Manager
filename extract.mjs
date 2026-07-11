@@ -2,69 +2,19 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = __dirname;
+import { ROOT, appendLog, isImage, listImages, nowIso, pathExists, readJson, uniquePath, writeJson } from "./lib.mjs";
 
 const DIRS = {
   extractText: path.join(ROOT, "staging", "extract-text"),
   outputText: path.join(ROOT, "output", "text"),
   pendingDelete: path.join(ROOT, "output", "pending-delete"),
-  logs: path.join(ROOT, "logs"),
   state: path.join(ROOT, "state")
 };
 
 const ocrScriptPath = path.join(ROOT, "extract-ocr.ps1");
 const statePath = path.join(DIRS.state, "extract-state.json");
-const supportedExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp"]);
 const LOW_YIELD_CHARS = 5;
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-async function pathExists(filePath) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function readJson(filePath) {
-  try {
-    return JSON.parse(await fs.readFile(filePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-async function writeJson(filePath, data) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  await fs.rename(tmpPath, filePath);
-}
-
-async function uniquePath(dir, fileName) {
-  await fs.mkdir(dir, { recursive: true });
-  const parsed = path.parse(fileName);
-  let candidate = path.join(dir, fileName);
-  let count = 2;
-  while (await pathExists(candidate)) {
-    candidate = path.join(dir, `${parsed.name}__${count}${parsed.ext}`);
-    count += 1;
-  }
-  return candidate;
-}
-
-async function appendLog(batch, record) {
-  await fs.mkdir(DIRS.logs, { recursive: true });
-  const logPath = path.join(DIRS.logs, `${batch}.jsonl`);
-  await fs.appendFile(logPath, `${JSON.stringify({ timestamp: nowIso(), batch, ...record })}\n`, "utf8");
-}
 
 function parseArgs(argv) {
   const args = { batch: null };
@@ -77,18 +27,6 @@ function parseArgs(argv) {
     }
   }
   return args;
-}
-
-function isImage(name) {
-  return supportedExtensions.has(path.extname(name).toLowerCase());
-}
-
-async function listImages(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && isImage(entry.name))
-    .map((entry) => entry.name)
-    .sort();
 }
 
 async function scanBatch(batch) {

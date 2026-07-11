@@ -73,3 +73,31 @@ npm run extract
 - OCR 結果為空或極短的圖判定為 low-yield：不移動、留在 staging，md 中標註 `⚠️ low-yield`（留給未來 vision fallback 處理）。
 - 已處理紀錄保存在 `state/extract-state.json`，重跑只處理新增檔案；每張圖與批次摘要寫入 `logs/<批次>.jsonl`。
 - ⚠️ PowerShell 會把 `npm run extract -- --batch X` 的 `--` 剝掉，導致參數遺失而跑全部批次；請直接用 `node extract.mjs --batch X`。
+
+## 資料夾維護
+
+三個生命週期指令讓 staging / output / archive 不會無限堆積。⚠️ 同 OCR 節的陷阱：PowerShell 會剝掉 `npm run <cmd> -- --flag` 的 `--`，帶參數時請直接呼叫 `node <script>.mjs --flag`。
+
+### 總覽：`npm run status`
+
+- 純唯讀，不寫任何檔案或 log。
+- 列出：`Input/` 待分流張數；staging 四資料夾（extract-text / keep / review-later / trash-candidate）各批次張數與最舊批次日期；`output/pending-delete/` 各批次張數；`output/text/` 已產出的 md 清單；`archive/originals/` 各批次張數。
+- extract-text 批次會比對 `state/extract-state.json`，區分「待 OCR」與「low-yield 留置」。
+
+### 回流：`npm run requeue`
+
+- 把 `staging/review-later/` 的圖片移回 `Input/` 進下一輪審閱。
+- **預設 dry-run**（只列出將移動的檔案與數量）；`node requeue.mjs --apply` 才真的移動。
+- `--batch 2026-06-21` 只回流指定批次。
+- 撞名自動加 `__2` 後綴（同分流工具策略）；移動後清空的批次資料夾會順手移除；每筆移動與摘要寫入 `logs/<批次>.jsonl`。
+
+### 清理：`npm run purge`
+
+- **預設 dry-run**，只列出逾保留期的檔案清單與總大小 — 沒有 `--apply` 絕不動任何檔案。
+- 三個清理目標與預設保留期（以「批次資料夾名稱的日期」計齡）：
+  - `staging/trash-candidate/`：14 天（`--days N` 可調）
+  - `output/pending-delete/`：14 天（同 `--days`）
+  - `archive/originals/`：90 天（`--archive-days N` 可調）
+- `--target trash|archive|pending-delete|all` 選擇清理範圍，預設 `all`。
+- `node purge.mjs --apply` 刪除前會要求輸入 `yes` 確認；`--yes` 可跳過確認（給自動化用）。
+- 每筆刪除與批次摘要寫入 `logs/<批次>.jsonl`。工具永不自動刪 — 刪除永遠是人按最後一下。

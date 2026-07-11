@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node server.mjs",
     "extract": "node extract.mjs",
+    "status": "node status.mjs",
+    "requeue": "node requeue.mjs",
+    "purge": "node purge.mjs",
     "check": "node --check server.mjs"
   }
 }
