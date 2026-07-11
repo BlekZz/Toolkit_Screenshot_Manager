@@ -24,6 +24,14 @@ const els = {
   statStarted: document.querySelector("#statStarted"),
   statUpdated: document.querySelector("#statUpdated"),
   resumeButton: document.querySelector("#resumeButton"),
+  maintenanceButton: document.querySelector("#maintenanceButton"),
+  maintenancePanel: document.querySelector("#maintenancePanel"),
+  maintenanceOutput: document.querySelector("#maintenanceOutput"),
+  maintenanceConfirm: document.querySelector("#maintenanceConfirm"),
+  maintenanceConfirmLabel: document.querySelector("#maintenanceConfirmLabel"),
+  maintenanceConfirmButton: document.querySelector("#maintenanceConfirmButton"),
+  maintenanceCancelButton: document.querySelector("#maintenanceCancelButton"),
+  maintenanceCloseButton: document.querySelector("#maintenanceCloseButton"),
   toast: document.querySelector("#toast")
 };
 
@@ -41,7 +49,9 @@ const state = {
   panY: 0,
   panDrag: null,
   busy: false,
-  statsView: false
+  statsView: false,
+  maintenanceRunning: false,
+  pendingApply: null
 };
 
 const ratioMap = {
@@ -290,6 +300,7 @@ function exitCropMode() {
   state.drag = null;
   els.cropTools.hidden = true;
   els.cropCanvas.hidden = true;
+  els.cropCanvas.style.cursor = "";
   els.mainImage.hidden = false;
   renderActionHints();
 }
@@ -357,8 +368,29 @@ function cropHit(point) {
   if (nearRight && nearTop) return "resize-ne";
   if (nearLeft && nearBottom) return "resize-sw";
   if (nearRight && nearBottom) return "resize-se";
+  if (nearLeft && insideY) return "resize-w";
+  if (nearRight && insideY) return "resize-e";
+  if (nearTop && insideX) return "resize-n";
+  if (nearBottom && insideX) return "resize-s";
   if (insideX && insideY) return "move";
   return "new";
+}
+
+const cropCursors = {
+  "resize-nw": "nwse-resize",
+  "resize-se": "nwse-resize",
+  "resize-ne": "nesw-resize",
+  "resize-sw": "nesw-resize",
+  "resize-n": "ns-resize",
+  "resize-s": "ns-resize",
+  "resize-w": "ew-resize",
+  "resize-e": "ew-resize",
+  move: "move",
+  new: "crosshair"
+};
+
+function updateCropCursor(hit) {
+  els.cropCanvas.style.cursor = cropCursors[hit] || "crosshair";
 }
 
 function clampCrop(crop) {
@@ -620,10 +652,69 @@ function toggleGroup() {
   }
 }
 
+const maintenanceApplyMap = {
+  "requeue-dry": { task: "requeue-apply", label: "確認把上述圖片移回 Input？" },
+  "purge-dry": { task: "purge-apply", label: "確認永久刪除上述檔案？此動作不可復原。" }
+};
+
+function openMaintenance() {
+  if (state.mode !== "browse" || !els.summaryPanel.hidden || !els.maintenancePanel.hidden) return;
+  els.maintenancePanel.hidden = false;
+  runMaintenance("status");
+}
+
+function closeMaintenance() {
+  if (state.maintenanceRunning) return;
+  hideMaintenanceConfirm();
+  els.maintenancePanel.hidden = true;
+}
+
+function hideMaintenanceConfirm() {
+  state.pendingApply = null;
+  els.maintenanceConfirm.hidden = true;
+}
+
+function setMaintenanceBusy(busy) {
+  state.maintenanceRunning = busy;
+  for (const button of els.maintenancePanel.querySelectorAll("button")) {
+    button.disabled = busy;
+  }
+}
+
+async function runMaintenance(task) {
+  if (state.maintenanceRunning) return;
+  hideMaintenanceConfirm();
+  setMaintenanceBusy(true);
+  els.maintenanceOutput.textContent = `執行中：${task} …`;
+  try {
+    const data = await api("/api/maintenance/run", {
+      method: "POST",
+      body: JSON.stringify({ task })
+    });
+    els.maintenanceOutput.textContent = data.output || "(no output)";
+    if (data.exitCode !== 0) {
+      els.maintenanceOutput.textContent += `\n\n(exit code ${data.exitCode})`;
+    } else {
+      const applyInfo = maintenanceApplyMap[task];
+      if (applyInfo && /Dry-run:/i.test(data.output)) {
+        state.pendingApply = applyInfo.task;
+        els.maintenanceConfirmLabel.textContent = applyInfo.label;
+        els.maintenanceConfirm.hidden = false;
+      }
+      if (task === "requeue-apply") await loadSession();
+    }
+  } catch (error) {
+    els.maintenanceOutput.textContent = `錯誤：${error.message}`;
+  } finally {
+    setMaintenanceBusy(false);
+  }
+}
+
 els.cropCanvas.addEventListener("pointerdown", (event) => {
   if (state.mode !== "crop") return;
   const point = canvasPoint(event);
   const hit = cropHit(point);
+  updateCropCursor(hit);
   const box = state.crop ? normalizeCrop(state.crop) : null;
   state.drag = {
     startX: point.x,
@@ -639,7 +730,11 @@ els.cropCanvas.addEventListener("pointerdown", (event) => {
 });
 
 els.cropCanvas.addEventListener("pointermove", (event) => {
-  if (state.mode !== "crop" || !state.drag) return;
+  if (state.mode !== "crop") return;
+  if (!state.drag) {
+    updateCropCursor(cropHit(canvasPoint(event)));
+    return;
+  }
   const point = canvasPoint(event);
   const dx = point.x - state.drag.startX;
   const dy = point.y - state.drag.startY;
@@ -648,22 +743,23 @@ els.cropCanvas.addEventListener("pointermove", (event) => {
   if (state.drag.hit === "move" && original) {
     state.crop = clampCrop({ ...original, x: original.x + dx, y: original.y + dy });
   } else if (state.drag.hit.startsWith("resize") && original) {
+    const dir = state.drag.hit.slice("resize-".length);
     let x = original.x;
     let y = original.y;
     let width = original.width;
     let height = original.height;
-    if (state.drag.hit.includes("w")) {
+    if (dir.includes("w")) {
       x = original.x + dx;
       width = original.width - dx;
     }
-    if (state.drag.hit.includes("e")) {
+    if (dir.includes("e")) {
       width = original.width + dx;
     }
-    if (state.drag.hit.includes("n")) {
+    if (dir.includes("n")) {
       y = original.y + dy;
       height = original.height - dy;
     }
-    if (state.drag.hit.includes("s")) {
+    if (dir.includes("s")) {
       height = original.height + dy;
     }
     state.crop = normalizeCrop(applyRatio({ x, y, width, height }, x, y));
@@ -679,9 +775,10 @@ els.cropCanvas.addEventListener("pointermove", (event) => {
   drawCropCanvas();
 });
 
-els.cropCanvas.addEventListener("pointerup", () => {
+els.cropCanvas.addEventListener("pointerup", (event) => {
   state.drag = null;
   if (state.crop) state.crop = normalizeCrop(state.crop);
+  updateCropCursor(cropHit(canvasPoint(event)));
   drawCropCanvas();
 });
 
@@ -737,6 +834,16 @@ els.resumeButton.addEventListener("click", () => {
   resume();
 });
 
+els.maintenanceButton.addEventListener("click", openMaintenance);
+els.maintenanceCloseButton.addEventListener("click", closeMaintenance);
+els.maintenanceCancelButton.addEventListener("click", hideMaintenanceConfirm);
+els.maintenanceConfirmButton.addEventListener("click", () => {
+  if (state.pendingApply) runMaintenance(state.pendingApply);
+});
+for (const button of els.maintenancePanel.querySelectorAll("[data-maintenance]")) {
+  button.addEventListener("click", () => runMaintenance(button.dataset.maintenance));
+}
+
 els.mainImage.addEventListener("load", updateImageInfo);
 
 window.addEventListener("resize", () => {
@@ -750,6 +857,14 @@ document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   const repeatable = ["arrowleft", "arrowright", "arrowup", "arrowdown", "a", "d"].includes(key);
   if (event.repeat && !repeatable) return;
+
+  if (!els.maintenancePanel.hidden) {
+    if ((key === "escape" || key === "m") && !state.maintenanceRunning) {
+      event.preventDefault();
+      closeMaintenance();
+    }
+    return;
+  }
 
   if (!els.summaryPanel.hidden && state.statsView) {
     if (key === "s" || key === "escape") {
@@ -792,6 +907,7 @@ document.addEventListener("keydown", (event) => {
   if (key === "z") undo();
   if (key === "p") pause();
   if (key === "s") openStatsView();
+  if (key === "m") openMaintenance();
   if (key === "g" && event.shiftKey) cancelGroup();
   if (key === "g" && !event.shiftKey) toggleGroup();
   if (key === "arrowleft" || key === "a") moveIndex(-1);

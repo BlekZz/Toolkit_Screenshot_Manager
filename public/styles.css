@@ -273,6 +273,64 @@ kbd {
   font-weight: 600;
 }
 
+.strip-button {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.maintenance-card {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.maintenance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.maintenance-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: rgba(242, 189, 107, 0.08);
+}
+
+.maintenance-confirm span {
+  flex: 1;
+  color: var(--warn);
+}
+
+.maintenance-confirm button.danger {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.maintenance-output {
+  margin: 0;
+  max-height: min(44vh, 420px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+  border-color: var(--line);
+  color: var(--muted);
+}
+
 .toast {
   position: fixed;
   z-index: 30;

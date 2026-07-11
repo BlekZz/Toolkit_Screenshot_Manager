@@ -21,6 +21,7 @@ function Await($WinRtTask, $ResultType) {
 [Windows.Globalization.Language, Windows.Foundation, ContentType = WindowsRuntime] | Out-Null
 [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime] | Out-Null
 [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics, ContentType = WindowsRuntime] | Out-Null
+[Windows.Graphics.Imaging.BitmapTransform, Windows.Graphics, ContentType = WindowsRuntime] | Out-Null
 
 $lang = New-Object Windows.Globalization.Language $LangTag
 if (-not [Windows.Media.Ocr.OcrEngine]::IsLanguageSupported($lang)) {
@@ -36,13 +37,34 @@ if ($null -eq $engine) {
     exit 1
 }
 
+# Upscaling low-resolution screenshots is the single biggest accuracy lever for
+# Windows OCR on CJK text (prevents characters being split into radicals).
+$maxDim = [double][Windows.Media.Ocr.OcrEngine]::MaxImageDimension
+
 $paths = [System.IO.File]::ReadAllLines($ManifestPath) | Where-Object { $_ -ne '' }
 $results = foreach ($p in $paths) {
     try {
         $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($p)) ([Windows.Storage.StorageFile])
         $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
         $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-        $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        $width = [double]$decoder.OrientedPixelWidth
+        $height = [double]$decoder.OrientedPixelHeight
+        $scale = [Math]::Min(2.0, $maxDim / [Math]::Max($width, $height))
+        if ($scale -gt 1.01) {
+            $transform = New-Object Windows.Graphics.Imaging.BitmapTransform
+            $transform.InterpolationMode = [Windows.Graphics.Imaging.BitmapInterpolationMode]::Fant
+            $transform.ScaledWidth = [uint32][Math]::Round($width * $scale)
+            $transform.ScaledHeight = [uint32][Math]::Round($height * $scale)
+            $bitmap = Await ($decoder.GetSoftwareBitmapAsync(
+                [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8,
+                [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied,
+                $transform,
+                [Windows.Graphics.Imaging.ExifOrientationMode]::RespectExifOrientation,
+                [Windows.Graphics.Imaging.ColorManagementMode]::DoNotColorManage
+            )) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        } else {
+            $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        }
         $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
         $text = @($result.Lines | ForEach-Object { $_.Text }) -join "`n"
         $stream.Dispose(); $bitmap.Dispose()

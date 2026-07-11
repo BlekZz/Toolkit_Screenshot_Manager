@@ -10,7 +10,8 @@
 | M0 穩定性與效能修復包 | ✅ 完成 | 2026-07-11 完成，沙箱回歸驗收通過（見 M0 驗收紀錄） |
 | M1 OCR 批次管線 | ✅ 完成 | 2026-07-11 完成，引擎選型 Windows OCR，獨立驗收通過（見 M1 驗收紀錄） |
 | M2 資料夾生命週期指令 | ✅ 完成 | 2026-07-11 完成，獨立驗收通過（見 M2 驗收紀錄） |
-| M3 審閱效率與輸出品質包 | ✅ 完成 | 2026-07-11 完成，獨立驗收通過（見 M3 驗收紀錄） |
+| M3 審閱效率與輸出品質包 | ✅ 完成 | 2026-07-11 完成，獨立驗收通過（見 M3 驗收紀錄）；真機確認：crop 縮放 / S 統計 / 頂欄 皆 OK |
+| M6 使用者回饋批次 1 | 🔄 實作完成 | 2026-07-11 三項全部實作＋本機驗證通過；待真機確認 crop 游標與維護面板（見 M6 驗證紀錄） |
 
 ## 1. 背景與現況
 
@@ -28,6 +29,7 @@
 | M3 | 審閱效率與輸出品質包 | 小 | 4 |
 | M4 | 第二輪審閱模式（來源參數化） | 中 | 視 review-later 積壓速度決定 |
 | M5 | AI 筆記化（OCR md → tag → Obsidian） | 大 | 留待 MVP3 |
+| M6 | 使用者回饋批次 1（追加，2026-07-11） | 中 | crop 游標 / OCR 品質 / 維護指令進 UI |
 
 MVP2 建議收斂為 **M0 + M1 + M2 + M3**。
 
@@ -145,12 +147,74 @@ QA / 驗收條件：
 
 OCR md → tag / 類型分類（task/reference/idea/quote）→ Obsidian vault 落地，原文不改寫遺失。依賴 M1 品質穩定，MVP2 不排入。
 
+### M6：使用者回饋批次 1（2026-07-11 追加）
+
+來源：M0–M3 真機驗收後的使用者回饋。三個工作項。
+
+**6.1 crop 邊線 hover 游標與邊線拖拉**（`public/app.js`）
+
+- `cropHit` 補四條邊線中段判定（`resize-n/s/e/w`），四角判定維持優先；`cropCursors` 補 `ns-resize` / `ew-resize`。
+- **附帶修 bug**：resize 拖拉分支以 `hit.includes("e")`/`includes("s")` 判向，但 `"resize-nw"` 等字串本身即含 `e`、`s`（在 "resize" 前綴裡），導致 NW/NE/SW 三角拖拉被 e/s 分支覆寫、方向錯亂。改為解析 `"resize-"` 後綴再判向。
+- 邊線拖拉沿用既有 w/e/n/s 分支，天然相容。
+
+QA：
+- [ ] hover 四角 → 對角 resize 游標；四邊中段 → `ns-resize`/`ew-resize`；框內 → move；框外 → crosshair。（待真機）
+- [ ] 四角、四邊拖拉方向皆正確（特別回歸 NW/NE/SW 三角）。（邏輯修正完成，待真機）
+- [ ] ratio 鎖定下拖拉仍維持比例。（待真機）
+
+**6.2 OCR 品質優化**（`extract-ocr.ps1` + `extract.mjs`）
+
+現況問題（`output/text/2026-06-21.md` 實證）：低解析 CJK 被拆成部首（亻言→信、至丨→到）、字元混淆（`SSlS`→`SSIS`、`T0p`→`Top`、`一`→`-`）、標點雜訊（`" , "`、`1 · 5 萬`、`1 , 636`）。
+
+- ps1：OCR 前以 `BitmapTransform`（Fant 插值）放大 2 倍，上限 `OcrEngine.MaxImageDimension`，並 RespectExifOrientation。放大是 Windows OCR CJK 準確率最大單一槓桿。
+- `cleanText` 強化（保守規則、先後有序）：大寫序列中 `l`→`I`；ASCII 碼與數字間的 `一`→`-`；`數字·數字`→小數點；`數字 , 數字`→千分位；CJK 間半形逗號/括號→全形；全形標點前後空白清除；既有 Han-Han 空白清除保留。
+- 不排入：LLM vision fallback（需 API key，留 MVP3）；行序重排（現輸出已按閱讀序）。
+
+QA：
+- [x] 以 pending-delete 既有樣本直跑 ps1，與舊輸出肉眼比對，部首拆字顯著減少。（4 張最差樣本實測：`亻言義區`→`信義區`、`至丨`→`到`、`SSlS`→`SSIS` 於 OCR 原生層即修復；地址整行復原）
+- [x] cleanText 規則案例表驗證，不誤傷正常中英文句。（14 個修復案例 + 8 個安全案例全過，含英文句、hashtag、程式碼、單位）
+- [x] 管線冪等 / 搬檔 / low-yield 行為零變更。（僅動 cleanText 與 ps1 解碼路徑；`extract` 空跑回報 up to date 正常）
+
+**6.3 維護操作進前台 UI**（`server.mjs` + `public/*`）
+
+- 新 API：`POST /api/maintenance/run`，body `{task}`；task 白名單 `status` / `extract` / `requeue-dry` / `requeue-apply` / `purge-dry` / `purge-apply`。以 `spawn(node, <script>)` 重用既經 M1/M2 驗收的 CLI（`purge-apply` 帶 `--yes`，人工確認移至 UI 按鈕）。單飛鎖（執行中回 409）+ 進 mutation queue（防與 classify 併發競態）。
+- UI：頂欄「維護」按鈕 + 快捷鍵 `M` → overlay 面板；開啟即自動載入 status；extract 一鍵執行；requeue / purge 兩段式：先 dry-run 顯示清單 → 一鍵「確認執行」（不再要求終端輸入 yes）；輸出顯示於面板 `<pre>`；requeue-apply 成功後自動重載 session。
+- 說明：裁剪本身（Q/W）已於 UI 即時完成，不屬本項範圍。
+
+QA：
+- [x] 白名單外 task 一律 400；執行中再觸發回 409。（curl 實測：bogus task 400；併發雙發 status 得 409+200）
+- [x] dry-run 永不動檔；purge-apply 僅在 UI 確認後發出。（requeue-dry / purge-dry 實測輸出正確且零檔案異動；apply 僅由確認按鈕觸發）
+- [ ] requeue-apply 後畫面立即出現回流圖片，無需重啟 server。（程式路徑完成，未對真實資料演練 — 待使用者於 UI 首跑）
+- [ ] extract 執行中發出分類操作，被 mutation queue 序列化、state 不損毀。（by-construction：maintenance 與 classify 同走 mutation queue；未做長任務競態實測）
+
+**6.4 low-yield 獨立 pool（2026-07-11 追加回饋）**（`extract.mjs` + `status.mjs`）
+
+問題：low-yield 圖片原本靜默留在 extract-text（只進 state 不移動），使用者無法感知失敗、也沒有獨立出口。
+
+- extract：low-yield 圖片改移至 `staging/low-yield/<批次>/`（保留 single/group 子結構、uniquePath 防撞名）；md 標註升級為「⚠️ low-yield — 原圖已移至 …」；log 補 `moved_to`；state 記錄去向。
+- 重試機制：把圖移回 `staging/extract-text/<批次>/` 再跑 extract 即重試（stale-skip 規則本就豁免 low-yield）。正式出口留 MVP3 vision fallback。
+- status：staging 掃描列表加入 `low-yield` 區（標註 `OCR failed, awaiting fallback/manual`）；extract-text 舊「low-yield held」註記移除（已無留置語意）。
+- purge 刻意**不**納入 low-yield（待處理 pool 永不自動清）。
+
+QA：
+- [x] low-yield 圖確實移至 pool、md 有標註與去向、log 有 moved_to。（真實重跑實證：2 張 low-yield 全中）
+- [x] 數量守恆：37 進 = 35 pending-delete + 2 low-yield，extract-text 清空。
+- [x] status 顯示 low-yield 獨立區與批次數。
+
+### M6 驗證紀錄（2026-07-11）
+
+- 6.1：邊線 hover 游標與邊線拖拉完成；附帶修復既有 NW/NE/SW 角拖拉方向 bug（`"resize-nw".includes("e")` 誤中 "resize" 前綴的 e/s）。純視覺項待真機確認。
+- 6.2：ps1 加 2 倍 Fant 放大（上限 `OcrEngine.MaxImageDimension`、RespectExifOrientation）；cleanText 新增 10 條保守修復規則。4 張最差樣本實測品質顯著提升；重跑舊批次的步驟見 README / 對話紀錄。
+- 6.3：`POST /api/maintenance/run`（白名單 6 task、單飛鎖、進 mutation queue）+ 前台維護面板（`M` 鍵 / 頂欄按鈕，requeue/purge 兩段式 UI 確認取代終端 yes）。API 層 curl 全數驗證通過。
+- 已知取捨：extract 長任務執行期間 classify 會排隊等待（同一 queue，防競態的刻意設計）；面板執行中不可關閉。
+- 6.4 + 真實重跑：2026-06-21 批次 37 張以新管線重新 OCR（舊 md 已重建，品質顯著提升：`1.5萬`、`1,636`、全形標點、部首拆字消失），low-yield 2 張進 `staging/low-yield/2026-06-21/`。README 新增「運作全貌」節（2 張 Mermaid flow 圖 + 機制表，語法經 Mermaid 工具驗證）。
+
 ---
 
 ## 4. 最終驗收清單（MVP2 = M0–M3）
 
 - [x] M0 全部 QA 通過，MVP1 行為回歸無退化。（唯 crop 視窗縮放待真機人工確認）
-- [ ] 一批真實截圖可走完完整價值鏈：Input → Q 分流 → `npm run extract` → markdown 產出 → pending-delete。（管線已就緒且沙箱全流程通過；真實資料首跑保留給使用者執行——現存 staging/extract-text 有 36 張待 OCR）
+- [x] 一批真實截圖可走完完整價值鏈：Input → Q 分流 → `npm run extract` → markdown 產出 → pending-delete。（2026-07-11 真實資料完成：首跑 + M6 品質升級後全批重跑 37 張，35 extracted / 2 low-yield，零 error）
 - [x] 四個 staging 資料夾各自有可執行的出口（extract / requeue / purge / status 可見）。
 - [x] README 與 [[Spec_Screenshot_Triage_MVP1]] 同步更新至 MVP2 實際行為。
 

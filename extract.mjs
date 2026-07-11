@@ -9,6 +9,7 @@ const DIRS = {
   extractText: path.join(ROOT, "staging", "extract-text"),
   outputText: path.join(ROOT, "output", "text"),
   pendingDelete: path.join(ROOT, "output", "pending-delete"),
+  lowYield: path.join(ROOT, "staging", "low-yield"),
   state: path.join(ROOT, "state")
 };
 
@@ -54,10 +55,37 @@ async function scanBatch(batch) {
   return { batch, batchDir, singles, groups };
 }
 
+// Conservative fixes for recurring Windows OCR mistakes, ordered so that
+// character-level fixes run before whitespace collapsing.
 function cleanText(raw) {
-  return String(raw || "")
-    .replace(/(?<=\p{Script=Han})[ \t]+(?=\p{Script=Han})/gu, "")
-    .trim();
+  return (
+    String(raw || "")
+      // lowercase l between uppercase letters is a misread I (SSlS -> SSIS)
+      .replace(/(?<=[A-Z])l(?=[A-Z])/g, "I")
+      // digit 0 between a letter and a lowercase letter is a misread o (T0kyo -> Tokyo)
+      .replace(/(?<=[A-Za-z])0(?=[a-z])/g, "o")
+      // fullwidth dash after ASCII code, before digits or an opening paren, is a misread hyphen
+      .replace(/(?<=[A-Za-z0-9])[ \t]?[一—][ \t]?(?=[\d(（])/gu, "-")
+      // middle dot between digits is a misread decimal point (1 · 5 萬 -> 1.5萬)
+      .replace(/(?<=\d)[ \t]?·[ \t]?(?=\d)/g, ".")
+      // spaced comma between digit groups is a thousands separator (1 , 636 -> 1,636)
+      .replace(/(?<=\d)[ \t]?,[ \t]?(?=\d{3}(?!\d))/g, ",")
+      // OCR emits the radical 丶 for the enumeration comma 、
+      .replace(/丶/g, "、")
+      // halfwidth punctuation floating after Han characters -> fullwidth
+      .replace(/(?<=\p{Script=Han})[ \t]?,[ \t]?(?=\p{Script=Han})/gu, "，")
+      .replace(/(?<=\p{Script=Han})[ \t]?,(?=[ \t]*(?:\n|$))/gu, "，")
+      .replace(/\([ \t]?(?=\p{Script=Han})/gu, "（")
+      .replace(/(?<=\p{Script=Han})[ \t]?\)/gu, "）")
+      // strip spaces around fullwidth punctuation
+      .replace(/[ \t]*([，。、；：！？「」『』（）《》…])[ \t]*/gu, "$1")
+      // strip spaces just inside halfwidth parens (( SONE-565 ) -> (SONE-565))
+      .replace(/\([ \t]+/g, "(")
+      .replace(/[ \t]+\)/g, ")")
+      // strip spaces between Han characters
+      .replace(/(?<=\p{Script=Han})[ \t]+(?=\p{Script=Han})/gu, "")
+      .trim()
+  );
 }
 
 async function runOcr(absolutePaths) {
@@ -103,9 +131,9 @@ function batchState(state, batch) {
   return state.batches[batch];
 }
 
-async function moveToPendingDelete(batch, batchDir, rel) {
+async function moveOut(baseDir, batch, batchDir, rel) {
   const relDir = path.posix.dirname(rel);
-  const destDir = relDir === "." ? path.join(DIRS.pendingDelete, batch) : path.join(DIRS.pendingDelete, batch, relDir);
+  const destDir = relDir === "." ? path.join(baseDir, batch) : path.join(baseDir, batch, relDir);
   const destPath = await uniquePath(destDir, path.posix.basename(rel));
   await fs.rename(path.join(batchDir, rel), destPath);
   return path.relative(ROOT, destPath).split(path.sep).join("/");
@@ -141,7 +169,7 @@ async function processBatch(scan, ocrResults, state) {
     outcomes.push(outcome);
     if (outcome.status === "error") continue;
     const body = [];
-    if (outcome.status === "low-yield") body.push("⚠️ low-yield");
+    if (outcome.status === "low-yield") body.push(`⚠️ low-yield — OCR 幾乎無文字，原圖已移至 staging/low-yield/${batch}/ 待後續處理`);
     if (outcome.text) body.push(outcome.text);
     sections.push(`## ${item.name}\n\n${body.join("\n\n") || "(no text)"}\n`);
   }
@@ -171,11 +199,19 @@ async function processBatch(scan, ocrResults, state) {
       continue;
     }
     if (outcome.status === "low-yield") {
-      files[outcome.item.rel] = { status: "low-yield", chars: outcome.text.length, at: nowIso() };
-      await appendLog(batch, { action: "extract", warning: "low-yield", source: sourceRel, output: mdRel, chars: outcome.text.length });
+      const movedTo = await moveOut(DIRS.lowYield, batch, batchDir, outcome.item.rel);
+      files[outcome.item.rel] = { status: "low-yield", chars: outcome.text.length, at: nowIso(), movedTo };
+      await appendLog(batch, {
+        action: "extract",
+        warning: "low-yield",
+        source: sourceRel,
+        output: mdRel,
+        chars: outcome.text.length,
+        moved_to: movedTo
+      });
       continue;
     }
-    const movedTo = await moveToPendingDelete(batch, batchDir, outcome.item.rel);
+    const movedTo = await moveOut(DIRS.pendingDelete, batch, batchDir, outcome.item.rel);
     files[outcome.item.rel] = { status: "extracted", chars: outcome.text.length, at: nowIso() };
     await appendLog(batch, { action: "extract", source: sourceRel, output: mdRel, chars: outcome.text.length, moved_to: movedTo });
   }
@@ -190,7 +226,7 @@ async function processBatch(scan, ocrResults, state) {
     output: mdRel
   });
   console.log(
-    `${batch}: ${counts.total} images | extracted ${counts.extracted} | low-yield ${counts.lowYield} | errors ${counts.errors} -> ${mdRel}`
+    `${batch}: ${counts.total} images | extracted ${counts.extracted} -> ${mdRel} | low-yield ${counts.lowYield} -> staging/low-yield/${batch}/ | errors ${counts.errors}`
   );
 }
 

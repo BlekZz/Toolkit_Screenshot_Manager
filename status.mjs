@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { ROOT, isImage, listBatchDirs, pathExists, readJson } from "./lib.mjs";
+import { ROOT, isImage, listBatchDirs, pathExists } from "./lib.mjs";
 
 const DIRS = {
   input: path.join(ROOT, "Input"),
@@ -11,8 +11,7 @@ const DIRS = {
   archiveOriginals: path.join(ROOT, "archive", "originals")
 };
 
-const STAGING_FOLDERS = ["extract-text", "keep", "review-later", "trash-candidate"];
-const extractStatePath = path.join(ROOT, "state", "extract-state.json");
+const STAGING_FOLDERS = ["extract-text", "low-yield", "keep", "review-later", "trash-candidate"];
 
 async function listImagesRecursive(dir, base = "") {
   const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -61,20 +60,18 @@ async function main() {
   out.push(`${"Input/".padEnd(28)}${String(await countInput()).padStart(6)} image(s) awaiting triage`);
   out.push("");
 
-  const extractState = (await readJson(extractStatePath)) || { batches: {} };
   for (const folder of STAGING_FOLDERS) {
     const baseDir = path.join(DIRS.staging, folder);
     const rows = await batchCounts(baseDir);
     out.push(sectionHeader(`staging/${folder}/`, rows));
     for (const row of rows) {
-      if (folder === "extract-text") {
-        const done = extractState.batches?.[row.batch]?.files || {};
-        const lowYield = row.images.filter((rel) => done[rel]?.status === "low-yield").length;
-        const pending = row.images.length - lowYield;
-        out.push(line(2, row.batch, row.images.length, `| pending OCR ${pending} | low-yield held ${lowYield}`));
-      } else {
-        out.push(line(2, row.batch, row.images.length));
-      }
+      const note =
+        folder === "extract-text"
+          ? "| awaiting OCR"
+          : folder === "low-yield"
+            ? "| OCR failed, awaiting fallback/manual"
+            : "";
+      out.push(line(2, row.batch, row.images.length, note));
     }
     out.push("");
   }

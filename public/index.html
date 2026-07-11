@@ -19,6 +19,7 @@
           <span id="progressLabel">0 / 0</span>
           <span id="undoLabel">Undo 0</span>
           <span id="groupLabel">Group off</span>
+          <span><button id="maintenanceButton" class="strip-button">維護 (M)</button></span>
         </div>
       </section>
 
@@ -72,6 +73,26 @@
             <div><dt>Last updated</dt><dd id="statUpdated" class="stat-time">–</dd></div>
           </dl>
           <button id="resumeButton">繼續整理</button>
+        </div>
+      </section>
+
+      <section class="summary-panel" id="maintenancePanel" hidden>
+        <div class="summary-card maintenance-card">
+          <div class="eyebrow">維護</div>
+          <h2>資料夾維護</h2>
+          <div class="maintenance-actions">
+            <button data-maintenance="status">重新整理狀態</button>
+            <button data-maintenance="extract">執行文字萃取 (OCR)</button>
+            <button data-maintenance="requeue-dry">回流稍後處理</button>
+            <button data-maintenance="purge-dry">清理過期檔案</button>
+          </div>
+          <div class="maintenance-confirm" id="maintenanceConfirm" hidden>
+            <span id="maintenanceConfirmLabel"></span>
+            <button id="maintenanceConfirmButton" class="danger">確認執行</button>
+            <button id="maintenanceCancelButton">取消</button>
+          </div>
+          <pre class="maintenance-output" id="maintenanceOutput"></pre>
+          <button id="maintenanceCloseButton">關閉 (Esc)</button>
         </div>
       </section>
 

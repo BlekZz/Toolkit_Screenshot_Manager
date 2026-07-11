@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -674,6 +675,45 @@ async function handleCancelGroup() {
   return { status: 200, data: await sessionPayload(state, filesAfter) };
 }
 
+// Maintenance tasks reuse the standalone CLI scripts (already validated in M1/M2).
+// purge-apply carries --yes because the human confirmation happens in the UI.
+const maintenanceTasks = {
+  status: ["status.mjs"],
+  extract: ["extract.mjs"],
+  "requeue-dry": ["requeue.mjs"],
+  "requeue-apply": ["requeue.mjs", "--apply"],
+  "purge-dry": ["purge.mjs"],
+  "purge-apply": ["purge.mjs", "--apply", "--yes"]
+};
+
+let maintenanceBusy = null;
+
+function runMaintenanceScript(args) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(ROOT, args[0]), ...args.slice(1)], {
+      cwd: ROOT,
+      windowsHide: true
+    });
+    let output = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.on("error", (error) => resolve({ exitCode: -1, output: `${output}\n${error.message}`.trim() }));
+    child.on("close", (code) => resolve({ exitCode: code ?? -1, output: output.trim() }));
+  });
+}
+
+async function handleMaintenance(task) {
+  const { exitCode, output } = await runMaintenanceScript(maintenanceTasks[task]);
+  await appendLog(currentBatch(), { action: "maintenance", task, exit_code: exitCode });
+  return { status: 200, data: { task, exitCode, output } };
+}
+
 async function serveStatic(response, urlPath) {
   const fileName = urlPath === "/" ? "index.html" : urlPath.slice(1);
   const requestedPath = path.normalize(path.join(DIRS.public, fileName));
@@ -766,6 +806,27 @@ async function route(request, response) {
     if (request.method === "POST" && url.pathname === "/api/group/cancel") {
       const result = await enqueueMutation(() => handleCancelGroup());
       await sendJson(response, result.status, result.data);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/maintenance/run") {
+      const body = await parseJsonBody(request);
+      const task = String(body.task || "");
+      if (!maintenanceTasks[task]) {
+        await sendJson(response, 400, { error: "Unsupported maintenance task." });
+        return;
+      }
+      if (maintenanceBusy) {
+        await sendJson(response, 409, { error: `Maintenance task already running: ${maintenanceBusy}` });
+        return;
+      }
+      maintenanceBusy = task;
+      try {
+        const result = await enqueueMutation(() => handleMaintenance(task));
+        await sendJson(response, result.status, result.data);
+      } finally {
+        maintenanceBusy = null;
+      }
       return;
     }
 
