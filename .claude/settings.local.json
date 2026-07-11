@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "PowerShell(Get-ChildItem \"D:\\\\000 Projects\\\\Toolkit_Screenshot_Manager\" | Select-Object Mode, Name; \\(Get-ChildItem \"D:\\\\000 Projects\\\\Toolkit_Screenshot_Manager\\\\Input\" -File | Measure-Object\\).Count)"
-    ]
-  }
-}
