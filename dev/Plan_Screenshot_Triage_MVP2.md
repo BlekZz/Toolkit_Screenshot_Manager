@@ -1,0 +1,117 @@
+# Plan：截圖分流工具 MVP2
+
+> 建立日期：2026-07-11。依 [[Spec_Screenshot_Triage_MVP1]] 驗收結果、架構審查與功能規劃綜合而成。
+> 本文件為 Plan 階段；承諾執行時依慣例更名為 `Sprint_Screenshot_Triage_MVP2.md` 並在文件內追蹤進度。
+
+## 1. 背景與現況
+
+- MVP1 已實作完成，§14 驗收 12 條中 11 條達成（詳見 [[Spec_Screenshot_Triage_MVP1]] 變更紀錄）。
+- 架構審查結論：程式碼品質良好（路徑防護、uniquePath、JSONL log、undo 設計皆正確），但存在一批穩定性/效能問題需優先處理（見 M0）。
+- 價值鏈斷點：staging 四個資料夾目前只進不出 — `extract-text` 的 OCR 消化（工具存在的核心理由）、`trash-candidate` 的清理、`review-later` 的回流機制皆未存在。
+
+## 2. 里程碑總覽
+
+| # | 里程碑 | 規模 | 建議順序 |
+|---|---|---|---|
+| M0 | 穩定性與效能修復包 | 小 | 1（先做，半天級） |
+| M1 | OCR 批次管線 `npm run extract` | 中 | 2（價值最高） |
+| M2 | 資料夾生命週期指令 status / requeue / purge | 小 | 3 |
+| M3 | 審閱效率與輸出品質包 | 小 | 4 |
+| M4 | 第二輪審閱模式（來源參數化） | 中 | 視 review-later 積壓速度決定 |
+| M5 | AI 筆記化（OCR md → tag → Obsidian） | 大 | 留待 MVP3 |
+
+MVP2 建議收斂為 **M0 + M1 + M2 + M3**。
+
+---
+
+## 3. 里程碑明細
+
+### M0：穩定性與效能修復包
+
+目標：消除已知 bug 與 1,000+ 張圖下的效能瓶頸，為後續里程碑鋪底。
+
+工作項（依優先序，佐證行號為 2026-07-11 審查時點）：
+
+1. **綁定 127.0.0.1**（`server.mjs:668`）：目前綁 0.0.0.0，全 LAN 可透過 /api/classify 操作檔案系統。一行修正，安全收益最大。
+2. **修 crop 模式 resize bug**（`app.js:642-644`）：crop 模式中調整視窗大小時 `#mainImage` 為 hidden，`getBoundingClientRect()` 全為 0 → canvas 塌陷成 0×0、scale 除以 0。改為量測 viewer 容器或暫時解除 hidden。
+3. **pause/resume 對稱化**：resume 只清 client flag（`app.js:635-640`），server 無 /api/resume → 重新整理後暫停畫面重現。加 POST /api/resume，或把 paused 改為純前端狀態。
+4. **消除雙重掃描與 O(n²)**（`server.mjs:149-258, 427`）：
+   - 每個 mutation handler 做兩輪完整目錄掃描 + 兩次 state 寫入（handler 自身一次、`sessionPayload()` 再一次）；GET /api/session 亦有寫入副作用（`loadState()` 內無條件 `saveState()`，`server.mjs:211`）。
+   - `order.includes(name)` 等 O(n²) 迴圈（`server.mjs:177-180, 226, 253-257`）改用 Set/Map；`listInputImages` 逐一 await `fs.stat`（`server.mjs:157`）改 `Promise.all` 或直接移除（size/modifiedAt 前端未使用）。
+5. **state 原子寫入 + mutation 序列化**：`writeJson` 直接覆寫（`server.mjs:99-102`）改為寫 `.tmp` 再 rename；全域 promise chain 序列化 mutation，防多分頁 last-write-wins。合計約 20 行。
+6. **cancelGroup 逐筆還原時每筆 save state**（`server.mjs:542-547`）：避免中途失敗時 state 與磁碟脫節、undoStack 殘留失效紀錄。
+7. **batch 換日邏輯**（`server.mjs:186`）：state 存在時永遠沿用首次日期。載入時若 `raw.batch !== today` 且 remaining 為 0 → 開新 session、歸檔舊 state。
+8. **readBody 加大小上限**（`server.mjs:320-324`）：50MB 即可。
+9. **`serveStatic` prefix check 補 `path.sep`**（`server.mjs:570-571`）：防禦性修正。
+
+QA / 驗收條件：
+- [ ] `netstat` 確認僅監聽 127.0.0.1。
+- [ ] crop 模式中縮放視窗，裁剪框仍正確可用。
+- [ ] 暫停 → 繼續 → F5 重新整理，不再出現暫停畫面。
+- [ ] 1,000 張圖下單次分類操作的 server 處理時間顯著下降（目錄掃描一次、state 寫入一次）。
+- [ ] 寫入中途 kill process 後重啟，state 不損毀（tmp+rename 生效）。
+- [ ] MVP1 全部既有行為（Q/W/E/R/Z/G/P、group、undo、續傳）回歸通過。
+
+明確不做（過度工程警告，架構審查結論）：
+- 不引入 Express/React 等框架、不上 SQLite、不做 auth/HTTPS、不做 WebSocket 多分頁同步、不改 multipart 上傳、不擴 undo stack 架構、不全面 TypeScript 化。
+- server.mjs 拆模組僅在 M0 完成後視需要順手做，不為拆而拆。
+
+### M1：OCR 批次管線 `npm run extract`
+
+目標：兌現 extract-text 的存在理由 — 分流產出自動變成 markdown 文字。
+
+- 對 `staging/extract-text/YYYY-MM-DD/` 執行 OCR：`single/` 每圖一章、`group-###/` 合併成一章。
+- 輸出 `output/text/YYYY-MM-DD.md`，含來源檔名回鏈。
+- 已處理圖片移至 `output/pending-delete/`；重跑不重複處理（需狀態追蹤）；全程寫 log。
+- **前置 spike**：以真實截圖比較 OCR 引擎（tesseract.js / Windows 內建 OCR / LLM vision）在中英混排下的品質後再選型 — 引擎選錯是本里程碑唯一高風險點。
+
+QA / 驗收條件：
+- [ ] `npm run extract` 對指定批次一鍵執行。
+- [ ] single 每圖一章、group 合併一章，來源檔名可回溯。
+- [ ] 重跑同一批次不產生重複輸出。
+- [ ] 已 OCR 圖片確實移至 pending-delete，原檔數量守恆。
+
+### M2：資料夾生命週期指令
+
+目標：staging 四資料夾都有出口，杜絕無限堆積。
+
+- `npm run status`：讀 logs + 掃 staging，輸出各區積壓張數與最舊日期。
+- `npm run requeue`：把 review-later 檔案移回 `Input/` 進下一輪；啟動時偵測積壓並提示。
+- `npm run purge`：trash-candidate 清理，**預設 dry-run**，逾冷靜期（14 天）+ 人工確認才真刪，寫 purge log。archive/originals 可併入、設較長保留期（如 90 天）。
+
+QA / 驗收條件：
+- [ ] status 統計與實際檔案數一致。
+- [ ] requeue 後下次啟動可見回流檔案。
+- [ ] purge dry-run 不動任何檔案；逾期過濾正確；確認後才刪且寫 log。工具永不自動刪 — 刪除永遠是人按最後一下。
+
+### M3：審閱效率與輸出品質包
+
+- full-crop（整張不裁）走 server 端直接搬檔，跳過 canvas 重編碼與 base64 round-trip（byte-identical、保留 EXIF）。
+- W（keep）輸出保留原格式，不再一律轉 PNG（jpg 來源膨脹數倍）。
+- Undo 深度 3 → 10（`server.mjs` slice 常數，state 已持久化）。
+- 啟動時自訂 batch name（`npm start -- --batch <name>`，spec §7.2 已預留）。
+- 頂欄顯示圖片尺寸/檔案大小。
+- 補 MVP1 殘餘缺口：獨立統計查看入口（不暫停）、統計畫面補 Started at / Last updated、undo 失敗寫 log。
+
+QA / 驗收條件：
+- [ ] 整張 keep 的輸出與原檔 byte-identical。
+- [ ] jpg 來源裁剪後輸出不再強制 PNG。
+- [ ] 連按 Z 可還原 10 步。
+- [ ] 自訂 batch name 反映在輸出路徑與 log。
+
+### M4：第二輪審閱模式（候選，可延後）
+
+目標：同一 UI 以 `--source staging/review-later/...` 為來源再跑一輪 Q/W/E/R。成本在 `Input/` 寫死於 server 各處、state 需按來源隔離。若 M2 的 requeue 已滿足需求，可不做。
+
+### M5：AI 筆記化（MVP3）
+
+OCR md → tag / 類型分類（task/reference/idea/quote）→ Obsidian vault 落地，原文不改寫遺失。依賴 M1 品質穩定，MVP2 不排入。
+
+---
+
+## 4. 最終驗收清單（MVP2 = M0–M3）
+
+- [ ] M0 全部 QA 通過，MVP1 行為回歸無退化。
+- [ ] 一批真實截圖可走完完整價值鏈：Input → Q 分流 → `npm run extract` → markdown 產出 → pending-delete。
+- [ ] 四個 staging 資料夾各自有可執行的出口（extract / requeue / purge / status 可見）。
+- [ ] README 與 [[Spec_Screenshot_Triage_MVP1]] 同步更新至 MVP2 實際行為。

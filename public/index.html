@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>截圖快速整理工具</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="topbar">
+        <div>
+          <div class="eyebrow" id="modeLabel">瀏覽模式</div>
+          <h1 id="fileName">Loading...</h1>
+        </div>
+        <div class="status-strip">
+          <span id="batchLabel">Batch</span>
+          <span id="progressLabel">0 / 0</span>
+          <span id="undoLabel">Undo 0</span>
+          <span id="groupLabel">Group off</span>
+        </div>
+      </section>
+
+      <section class="viewer" id="viewer">
+        <div class="empty-state" id="emptyState" hidden>
+          <h2>目前沒有待處理圖片</h2>
+          <p>把 PNG/JPG/JPEG/WEBP/BMP 放進 Input 資料夾後重新整理。</p>
+        </div>
+        <img id="mainImage" alt="目前截圖" draggable="false">
+        <canvas id="cropCanvas" hidden></canvas>
+      </section>
+
+      <section class="bottombar">
+        <div class="key-group">
+          <span class="key-hint" data-action-hint="extract-text"><kbd>Q</kbd><span>提取文字</span></span>
+          <span class="key-hint" data-action-hint="keep"><kbd>W</kbd><span>裁剪圖片</span></span>
+          <span class="key-hint" data-action-hint="review-later"><kbd>E</kbd><span>稍後</span></span>
+          <span class="key-hint" data-action-hint="trash-candidate"><kbd>R</kbd><span>候選刪除</span></span>
+        </div>
+        <div class="key-group">
+          <span class="key-hint"><kbd>Z</kbd><span>Undo</span></span>
+          <span class="key-hint"><kbd>P</kbd><span>暫停</span></span>
+          <span class="key-hint"><kbd>Enter</kbd><span>確認裁剪</span></span>
+          <span class="key-hint"><kbd>Space</kbd><span>確認</span></span>
+          <span class="key-hint" id="groupHint"><kbd>G</kbd><span>Group</span></span>
+          <span class="key-hint"><kbd>Shift+G</kbd><span>取消 Group</span></span>
+          <span class="key-hint"><kbd>Esc</kbd><span>取消</span></span>
+        </div>
+      </section>
+
+      <section class="crop-tools" id="cropTools" hidden>
+        <button data-ratio="free" class="active">自由</button>
+        <button data-ratio="1:1">1:1</button>
+        <button data-ratio="3:4">3:4</button>
+        <button data-ratio="16:9">16:9</button>
+      </section>
+
+      <section class="summary-panel" id="summaryPanel" hidden>
+        <div class="summary-card">
+          <div class="eyebrow" id="summaryTitle">暫停</div>
+          <h2 id="summaryHeading">Session 已保存</h2>
+          <dl class="summary-grid">
+            <div><dt>剩餘</dt><dd id="statRemaining">0</dd></div>
+            <div><dt>已處理</dt><dd id="statProcessed">0</dd></div>
+            <div><dt>提取文字</dt><dd id="statQ">0</dd></div>
+            <div><dt>裁剪圖片</dt><dd id="statW">0</dd></div>
+            <div><dt>稍後處理</dt><dd id="statE">0</dd></div>
+            <div><dt>候選刪除</dt><dd id="statR">0</dd></div>
+          </dl>
+          <button id="resumeButton">繼續整理</button>
+        </div>
+      </section>
+
+      <div class="toast" id="toast" hidden></div>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

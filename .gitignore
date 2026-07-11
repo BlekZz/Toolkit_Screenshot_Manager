@@ -1,0 +1,8 @@
+node_modules/
+Input/
+staging/
+archive/
+logs/
+state/
+.DS_Store
+Thumbs.db
