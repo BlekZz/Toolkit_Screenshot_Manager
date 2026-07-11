@@ -2,6 +2,7 @@ node_modules/
 Input/
 staging/
 archive/
+output/
 logs/
 state/
 .DS_Store

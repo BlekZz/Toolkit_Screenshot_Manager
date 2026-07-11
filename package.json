@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
+    "extract": "node extract.mjs",
     "check": "node --check server.mjs"
   }
 }

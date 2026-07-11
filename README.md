@@ -58,3 +58,18 @@ http://localhost:3030
 - 圖片依檔案名稱排序。
 - 每次操作會寫入 `logs/YYYY-MM-DD.jsonl`。
 - 目前進度保存在 `state/current-session.json`，可下次啟動後繼續。
+
+## 文字擷取（OCR）
+
+把 `staging/extract-text/` 累積的分流圖片批次轉成 markdown 文字（使用 Windows 內建 OCR，語言 zh-Hant-TW）：
+
+```powershell
+npm run extract
+```
+
+- 預設處理所有尚未處理的批次；指定單一批次用 `node extract.mjs --batch 2026-06-21`。
+- 輸出到 `output/text/YYYY-MM-DD.md`：`single/` 每圖一章，`group-###/` 合併成一章並列出來源檔名。
+- OCR 完成的圖片移到 `output/pending-delete/YYYY-MM-DD/`（保留 single/group 子結構），確認 md 內容沒問題後可整批刪除。
+- OCR 結果為空或極短的圖判定為 low-yield：不移動、留在 staging，md 中標註 `⚠️ low-yield`（留給未來 vision fallback 處理）。
+- 已處理紀錄保存在 `state/extract-state.json`，重跑只處理新增檔案；每張圖與批次摘要寫入 `logs/<批次>.jsonl`。
+- ⚠️ PowerShell 會把 `npm run extract -- --batch X` 的 `--` 剝掉，導致參數遺失而跑全部批次；請直接用 `node extract.mjs --batch X`。

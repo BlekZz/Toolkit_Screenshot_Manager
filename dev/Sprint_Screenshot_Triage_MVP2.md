@@ -8,7 +8,7 @@
 | 里程碑 | 狀態 | 備註 |
 |---|---|---|
 | M0 穩定性與效能修復包 | ✅ 完成 | 2026-07-11 完成，沙箱回歸驗收通過（見 M0 驗收紀錄） |
-| M1 OCR 批次管線 | ⬜ 未開始 | 前置：OCR 引擎選型 spike |
+| M1 OCR 批次管線 | ✅ 完成 | 2026-07-11 完成，引擎選型 Windows OCR，獨立驗收通過（見 M1 驗收紀錄） |
 | M2 資料夾生命週期指令 | ⬜ 未開始 | |
 | M3 審閱效率與輸出品質包 | ⬜ 未開始 | |
 
@@ -82,10 +82,18 @@ QA / 驗收條件：
 - **前置 spike**：以真實截圖比較 OCR 引擎（tesseract.js / Windows 內建 OCR / LLM vision）在中英混排下的品質後再選型 — 引擎選錯是本里程碑唯一高風險點。
 
 QA / 驗收條件：
-- [ ] `npm run extract` 對指定批次一鍵執行。
-- [ ] single 每圖一章、group 合併一章，來源檔名可回溯。
-- [ ] 重跑同一批次不產生重複輸出。
-- [ ] 已 OCR 圖片確實移至 pending-delete，原檔數量守恆。
+- [x] `npm run extract` 對指定批次一鍵執行。
+- [x] single 每圖一章、group 合併一章，來源檔名可回溯。
+- [x] 重跑同一批次不產生重複輸出。（沙箱實測 md hash byte-identical、零異動）
+- [x] 已 OCR 圖片確實移至 pending-delete，原檔數量守恆。（含 low-yield 留置對帳）
+
+### M1 驗收紀錄（2026-07-11）
+
+- **引擎選型 spike**：以 5 張真實裁剪圖比對 Windows 內建 OCR（WinRT, zh-Hant-TW）vs tesseract.js（chi_tra+eng）。Windows OCR 三軸全勝：乾淨版面近乎全對、51–211ms/張（快 5–10 倍）、零相依。tesseract.js 在雜訊背景崩潰且會從照片幻覺文字。**採用 Windows OCR 單引擎**。spike 留檔：scratchpad ocr-spike/RESULTS.md。
+- **實作**：`extract.mjs` + `extract-ocr.ps1`（單次 spawn powershell.exe 5.1 批次 OCR）+ CJK 字間空白清理。相容新版 single//group-###/ 與舊版散檔佈局。
+- **獨立驗收**（fresh-context 沙箱）：4 條驗收 + 13 個額外情境全過（冪等、增量、--batch 過濾、錯誤隔離、中文檔名 round-trip、路徑安全、UTF-8）。真實環境 170 檔逐檔比對零異動。
+- **驗收後補修**：崩潰視窗調序（先寫 md 再搬檔再存 state — 寧可重複不可遺失）；already-processed-but-present 告警；log 改寫 `logs/<batch>.jsonl` 對齊 server 慣例；README 新增 OCR 節（含 PowerShell `--` 剝除陷阱）。
+- **已知限制**（留給後續）：low-yield 檔案留置 staging 無出口（M2 需涵蓋或人工處理）；雜訊背景/藝術字類兩免費引擎皆不可靠，未來可選擇性丟 LLM vision（需 API key，未排入）；group 分次補跑會產生重複章名（低頻，可回溯）。
 
 ### M2：資料夾生命週期指令
 
