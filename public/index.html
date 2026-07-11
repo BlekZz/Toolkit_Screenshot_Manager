@@ -15,6 +15,7 @@
         </div>
         <div class="status-strip">
           <span id="batchLabel">Batch</span>
+          <span id="imageInfoLabel">–</span>
           <span id="progressLabel">0 / 0</span>
           <span id="undoLabel">Undo 0</span>
           <span id="groupLabel">Group off</span>
@@ -40,6 +41,7 @@
         <div class="key-group">
           <span class="key-hint"><kbd>Z</kbd><span>Undo</span></span>
           <span class="key-hint"><kbd>P</kbd><span>暫停</span></span>
+          <span class="key-hint"><kbd>S</kbd><span>統計</span></span>
           <span class="key-hint"><kbd>Enter</kbd><span>確認裁剪</span></span>
           <span class="key-hint"><kbd>Space</kbd><span>確認</span></span>
           <span class="key-hint" id="groupHint"><kbd>G</kbd><span>Group</span></span>
@@ -66,6 +68,8 @@
             <div><dt>裁剪圖片</dt><dd id="statW">0</dd></div>
             <div><dt>稍後處理</dt><dd id="statE">0</dd></div>
             <div><dt>候選刪除</dt><dd id="statR">0</dd></div>
+            <div><dt>Started at</dt><dd id="statStarted" class="stat-time">–</dd></div>
+            <div><dt>Last updated</dt><dd id="statUpdated" class="stat-time">–</dd></div>
           </dl>
           <button id="resumeButton">繼續整理</button>
         </div>

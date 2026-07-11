@@ -37,6 +37,38 @@ const actionConfig = {
 };
 
 const statePath = path.join(DIRS.state, "current-session.json");
+const UNDO_DEPTH = 10;
+
+function sanitizeBatchName(rawName) {
+  return String(rawName || "")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\s+/g, "-")
+    .replace(/^\.+/, "")
+    .replace(/[. ]+$/, "")
+    .slice(0, 80);
+}
+
+function parseBatchOverride(argv) {
+  const index = argv.indexOf("--batch");
+  if (index < 0) return null;
+  const raw = argv[index + 1];
+  if (!raw || raw.startsWith("--")) {
+    console.error("Missing value for --batch. Usage: node server.mjs --batch <name>");
+    process.exit(1);
+  }
+  const sanitized = sanitizeBatchName(raw);
+  if (!sanitized) {
+    console.error(`Invalid batch name: ${raw}`);
+    process.exit(1);
+  }
+  return sanitized;
+}
+
+const batchOverride = parseBatchOverride(process.argv.slice(2));
+
+function currentBatch() {
+  return batchOverride || todayBatch();
+}
 
 async function ensureBaseDirs() {
   await Promise.all([
@@ -75,7 +107,7 @@ function createEmptyStats() {
 function defaultState(files) {
   const timestamp = nowIso();
   return {
-    batch: todayBatch(),
+    batch: currentBatch(),
     currentFile: files[0]?.name || null,
     fileOrder: files.map((file) => file.name),
     undoStack: [],
@@ -195,10 +227,10 @@ function normalizeState(raw, files) {
   if (!currentFile) currentFile = order[0] || null;
 
   return {
-    batch: raw.batch || todayBatch(),
+    batch: batchOverride || raw.batch || todayBatch(),
     currentFile,
     fileOrder: order,
-    undoStack: Array.isArray(raw.undoStack) ? raw.undoStack.slice(-3) : [],
+    undoStack: Array.isArray(raw.undoStack) ? raw.undoStack.slice(-UNDO_DEPTH) : [],
     stats: normalizeStats(raw.stats),
     groupCounter: Number(raw.groupCounter || 0),
     activeGroup: normalizeActiveGroup(raw.activeGroup),
@@ -219,7 +251,7 @@ function normalizeActiveGroup(group) {
 
 async function loadState(files) {
   const raw = await readJson(statePath);
-  if (raw && typeof raw === "object" && raw.batch && raw.batch !== todayBatch() && files.length === 0) {
+  if (!batchOverride && raw && typeof raw === "object" && raw.batch && raw.batch !== todayBatch() && files.length === 0) {
     await writeJson(path.join(DIRS.logs, `state-archived-${raw.batch}.json`), raw);
     const state = defaultState(files);
     await saveState(state);
@@ -229,7 +261,7 @@ async function loadState(files) {
 }
 
 async function saveState(state) {
-  state.undoStack = (state.undoStack || []).slice(-3);
+  state.undoStack = (state.undoStack || []).slice(-UNDO_DEPTH);
   state.stats = normalizeStats(state.stats);
   state.lastUpdated = nowIso();
   await writeJson(statePath, state);
@@ -311,10 +343,22 @@ function summary(state, remaining) {
   };
 }
 
-function sessionPayload(state, files) {
+async function currentFileBytes(currentFileName) {
+  if (!currentFileName) return null;
+  try {
+    return (await fs.stat(path.join(DIRS.input, currentFileName))).size;
+  } catch {
+    return null;
+  }
+}
+
+async function sessionPayload(state, files) {
   const orderedFiles = remainingFilesFromState(state, files);
   return {
-    session: summary(state, orderedFiles),
+    session: {
+      ...summary(state, orderedFiles),
+      currentFileBytes: await currentFileBytes(state.currentFile)
+    },
     files: orderedFiles
   };
 }
@@ -385,31 +429,38 @@ async function handleClassify(body) {
 
   const files = await listInputImages();
   const state = await loadState(files);
-  const batch = state.batch || todayBatch();
+  const batch = state.batch || currentBatch();
   const config = actionConfig[action];
   const undoRecord = { action, sourceName };
 
   if (action === "extract-text" || action === "keep") {
-    const imageBase64 = String(body.imageBase64 || "");
-    const match = imageBase64.match(/^data:image\/png;base64,(.+)$/);
-    if (!match) return { status: 400, data: { error: "Missing cropped PNG data." } };
-
+    const crop = assertCrop(body.crop);
     const outputDir =
       action === "extract-text"
         ? config.outputDir(batch, state.activeGroup ? state.activeGroup.id : "single")
         : config.outputDir(batch);
     const archiveDir = path.join(DIRS.archive, "originals", batch);
-    const outputName = `${String(state.stats.processed + 1).padStart(4, "0")}__${safeStem(sourceName)}.png`;
-    const outputPath = await uniquePath(outputDir, outputName);
-    const archivePath = await uniquePath(archiveDir, sourceName);
+    const outputStem = `${String(state.stats.processed + 1).padStart(4, "0")}__${safeStem(sourceName)}`;
 
-    await fs.writeFile(outputPath, Buffer.from(match[1], "base64"));
+    let outputPath;
+    if (crop.mode === "full") {
+      outputPath = await uniquePath(outputDir, `${outputStem}${path.extname(sourceName).toLowerCase()}`);
+      await fs.copyFile(sourcePath, outputPath);
+    } else {
+      const imageBase64 = String(body.imageBase64 || "");
+      const match = imageBase64.match(/^data:image\/(png|jpeg);base64,(.+)$/);
+      if (!match) return { status: 400, data: { error: "Missing cropped image data." } };
+      outputPath = await uniquePath(outputDir, `${outputStem}${match[1] === "jpeg" ? ".jpg" : ".png"}`);
+      await fs.writeFile(outputPath, Buffer.from(match[2], "base64"));
+    }
+
+    const archivePath = await uniquePath(archiveDir, sourceName);
     await fs.rename(sourcePath, archivePath);
 
     Object.assign(undoRecord, {
       outputPath: rel(outputPath),
       archivedOriginal: rel(archivePath),
-      crop: assertCrop(body.crop)
+      crop
     });
 
     if (action === "extract-text" && state.activeGroup) {
@@ -445,7 +496,7 @@ async function handleClassify(body) {
 
   state.stats[config.stat] += 1;
   state.stats.processed += 1;
-  state.undoStack = [...(state.undoStack || []), undoRecord].slice(-3);
+  state.undoStack = [...(state.undoStack || []), undoRecord].slice(-UNDO_DEPTH);
   if (undoRecord.groupId && state.activeGroup?.id === undoRecord.groupId) {
     state.activeGroup.items.push(undoRecord);
   }
@@ -457,7 +508,7 @@ async function handleClassify(body) {
   state.fileOrder = updatedFileOrder(previousOrder, filesAfter);
   await saveState(state);
 
-  return { status: 200, data: sessionPayload(state, filesAfter) };
+  return { status: 200, data: await sessionPayload(state, filesAfter) };
 }
 
 async function restoreToInput(fromRelativePath, preferredName) {
@@ -493,7 +544,18 @@ async function handleUndo() {
   const config = actionConfig[record.action];
   if (!config) return { status: 400, data: { error: "Invalid undo record." } };
 
-  const restoredPath = await restoreRecord(record);
+  let restoredPath;
+  try {
+    restoredPath = await restoreRecord(record);
+  } catch (error) {
+    await appendLog(state.batch, {
+      action: "undo",
+      undo_of: record.action,
+      source: record.sourceName,
+      error: error.message || String(error)
+    });
+    throw error;
+  }
   const restoredName = path.basename(restoredPath);
 
   state.stats[config.stat] = Math.max(0, state.stats[config.stat] - 1);
@@ -513,7 +575,7 @@ async function handleUndo() {
   await saveState(state);
 
   const filesAfter = [inputFileEntry(restoredName), ...files.filter((file) => file.name !== restoredName)];
-  return { status: 200, data: sessionPayload(state, filesAfter) };
+  return { status: 200, data: await sessionPayload(state, filesAfter) };
 }
 
 async function handlePause() {
@@ -522,7 +584,7 @@ async function handlePause() {
   state.paused = true;
   await appendLog(state.batch, { action: "pause", current_file: state.currentFile });
   await saveState(state);
-  return { status: 200, data: sessionPayload(state, files) };
+  return { status: 200, data: await sessionPayload(state, files) };
 }
 
 async function handleResume() {
@@ -531,7 +593,7 @@ async function handleResume() {
   state.paused = false;
   await appendLog(state.batch, { action: "resume", current_file: state.currentFile });
   await saveState(state);
-  return { status: 200, data: sessionPayload(state, files) };
+  return { status: 200, data: await sessionPayload(state, files) };
 }
 
 async function handleStartGroup() {
@@ -555,7 +617,7 @@ async function handleStartGroup() {
     current_file: state.currentFile
   });
   await saveState(state);
-  return { status: 200, data: sessionPayload(state, files) };
+  return { status: 200, data: await sessionPayload(state, files) };
 }
 
 async function handleEndGroup() {
@@ -573,7 +635,7 @@ async function handleEndGroup() {
     item_count: group.items.length
   });
   await saveState(state);
-  return { status: 200, data: sessionPayload(state, files) };
+  return { status: 200, data: await sessionPayload(state, files) };
 }
 
 async function handleCancelGroup() {
@@ -609,7 +671,7 @@ async function handleCancelGroup() {
   await saveState(state);
 
   const filesAfter = [...restoredNames.map(inputFileEntry), ...files];
-  return { status: 200, data: sessionPayload(state, filesAfter) };
+  return { status: 200, data: await sessionPayload(state, filesAfter) };
 }
 
 async function serveStatic(response, urlPath) {
@@ -640,7 +702,7 @@ async function route(request, response) {
     if (request.method === "GET" && url.pathname === "/api/session") {
       const files = await listInputImages();
       const state = await loadState(files);
-      await sendJson(response, 200, sessionPayload(state, files));
+      await sendJson(response, 200, await sessionPayload(state, files));
       return;
     }
 
@@ -724,4 +786,5 @@ await ensureBaseDirs();
 createServer(route).listen(PORT, "127.0.0.1", () => {
   console.log(`Screenshot triage tool is running at http://localhost:${PORT}`);
   console.log(`Input folder: ${DIRS.input}`);
+  if (batchOverride) console.log(`Batch override: ${batchOverride}`);
 });

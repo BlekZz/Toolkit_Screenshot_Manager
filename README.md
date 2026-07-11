@@ -24,6 +24,18 @@ http://localhost:3030
 
 連接埠可用環境變數 `PORT` 覆寫。
 
+### 自訂 batch 名稱
+
+預設 batch 為今日日期（`YYYY-MM-DD`，Asia/Taipei）。要用自訂名稱（會反映在輸出路徑與 log 檔名）時：
+
+```powershell
+node server.mjs --batch my-batch-name
+```
+
+- 名稱會自動 sanitize 成安全檔名字元（非法字元換成 `_`）。
+- 指定 `--batch` 時不觸發換日重置，適合跨日整理同一批。
+- ⚠️ PowerShell 會把 `npm start -- --batch X` 的 `--` 剝掉，導致參數遺失；請直接用 `node server.mjs --batch X`。
+
 ## 快捷鍵
 
 | 按鍵 | 行為 |
@@ -32,8 +44,9 @@ http://localhost:3030
 | W | 進入裁剪圖片模式，輸出到 `staging/keep/YYYY-MM-DD/` |
 | E | 移到 `staging/review-later/YYYY-MM-DD/`，本輪不再 loop |
 | R | 移到 `staging/trash-candidate/YYYY-MM-DD/` |
-| Z | Undo 最近 3 次操作 |
+| Z | Undo 最近 10 次操作 |
 | P | 暫停並顯示本批次統計 |
+| S | 查看本批次統計（唯讀、不暫停），再按 S 或 Esc 關閉 |
 | G | 開始 / 結束文字 group |
 | Shift + G | 取消目前尚未結束的文字 group，並復原已加入圖片 |
 | Enter / Space | 確認裁剪 |
@@ -43,14 +56,18 @@ http://localhost:3030
 | 滾輪在圖片上 | 縮放目前預覽圖片 |
 | 滾輪在圖片外空白處 | 上一張 / 下一張 |
 | ← / → 或 A / D | 上一張 / 下一張，長按可快速切換 |
-| Enter / Space / Esc（統計畫面中） | 繼續整理 |
+| Enter / Space / Esc（暫停畫面中） | 繼續整理 |
 
 放大預覽圖片後，可用滑鼠左鍵拖曳移動畫面。進入 Q/W 裁剪模式時，預覽縮放會重置，以保持裁剪座標準確。
+
+頂欄會顯示目前圖片的尺寸（寬×高）；正在分類的那張同時顯示檔案大小。統計畫面（P 或 S）包含 Started at / Last updated 時間。
 
 ## 檔案規則
 
 - `Input/` 固定大寫。
 - Q/W 會輸出裁剪圖，並把原圖移到 `archive/originals/YYYY-MM-DD/`。
+- Q/W 沒有畫裁剪框（或框小於 4px）時視為整張保留：server 直接複製原檔，輸出與原檔 byte-identical（保留原副檔名與 EXIF），不經 canvas 重編碼。
+- W 有裁剪框時輸出格式跟隨來源：jpg/jpeg 來源輸出 `.jpg`（品質 0.92），png/webp/bmp 來源輸出 `.png`。Q 的裁剪輸出一律 `.png`（供 OCR 使用）。
 - Q 沒有開 group 時輸出到 `staging/extract-text/YYYY-MM-DD/single/`。
 - Q 開啟 group 時輸出到 `staging/extract-text/YYYY-MM-DD/group-###/`。
 - E/R 只移動原圖，不真正刪除。

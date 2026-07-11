@@ -2,6 +2,7 @@ const els = {
   modeLabel: document.querySelector("#modeLabel"),
   fileName: document.querySelector("#fileName"),
   batchLabel: document.querySelector("#batchLabel"),
+  imageInfoLabel: document.querySelector("#imageInfoLabel"),
   progressLabel: document.querySelector("#progressLabel"),
   undoLabel: document.querySelector("#undoLabel"),
   groupLabel: document.querySelector("#groupLabel"),
@@ -20,6 +21,8 @@ const els = {
   statW: document.querySelector("#statW"),
   statE: document.querySelector("#statE"),
   statR: document.querySelector("#statR"),
+  statStarted: document.querySelector("#statStarted"),
+  statUpdated: document.querySelector("#statUpdated"),
   resumeButton: document.querySelector("#resumeButton"),
   toast: document.querySelector("#toast")
 };
@@ -37,7 +40,8 @@ const state = {
   panX: 0,
   panY: 0,
   panDrag: null,
-  busy: false
+  busy: false,
+  statsView: false
 };
 
 const ratioMap = {
@@ -59,6 +63,31 @@ async function api(path, options = {}) {
 
 function currentFile() {
   return state.files[state.index] || null;
+}
+
+function formatBytes(bytes) {
+  if (bytes == null || Number.isNaN(bytes)) return null;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDateTime(iso) {
+  if (!iso) return "–";
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "–" : date.toLocaleString("zh-TW", { hour12: false });
+}
+
+function updateImageInfo() {
+  const file = currentFile();
+  if (!file || els.mainImage.dataset.name !== file.name || !els.mainImage.naturalWidth) {
+    els.imageInfoLabel.textContent = "–";
+    return;
+  }
+  const dims = `${els.mainImage.naturalWidth}×${els.mainImage.naturalHeight}`;
+  const size =
+    state.session?.currentFile === file.name ? formatBytes(state.session?.currentFileBytes) : null;
+  els.imageInfoLabel.textContent = size ? `${dims} · ${size}` : dims;
 }
 
 function toast(message) {
@@ -101,6 +130,7 @@ function render() {
 
   if (!file) {
     els.fileName.textContent = "沒有待處理圖片";
+    els.imageInfoLabel.textContent = "–";
     els.mainImage.hidden = true;
     els.cropCanvas.hidden = true;
     els.emptyState.hidden = false;
@@ -116,6 +146,7 @@ function render() {
     els.mainImage.dataset.name = file.name;
     els.mainImage.src = `${file.url}&t=${Date.now()}`;
   }
+  updateImageInfo();
   els.modeLabel.textContent = state.mode === "crop" ? `裁剪模式 ${state.pendingAction === "extract-text" ? "Q" : "W"}` : "瀏覽模式";
   els.cropTools.hidden = state.mode !== "crop";
   renderActionHints();
@@ -152,11 +183,24 @@ function showSummary(title, heading) {
   els.statW.textContent = stats.keep || 0;
   els.statE.textContent = stats.reviewLater || 0;
   els.statR.textContent = stats.trashCandidate || 0;
+  els.statStarted.textContent = formatDateTime(session?.startedAt);
+  els.statUpdated.textContent = formatDateTime(session?.lastUpdated);
   els.summaryPanel.hidden = false;
 }
 
 function hideSummary() {
   els.summaryPanel.hidden = true;
+  if (state.statsView) {
+    state.statsView = false;
+    els.resumeButton.textContent = "繼續整理";
+  }
+}
+
+function openStatsView() {
+  if (state.mode !== "browse" || !els.summaryPanel.hidden) return;
+  state.statsView = true;
+  els.resumeButton.textContent = "關閉";
+  showSummary("統計", "目前批次進度");
 }
 
 function moveIndex(delta) {
@@ -409,7 +453,15 @@ function cropToNatural() {
   };
 }
 
-async function imageDataFromCrop(crop) {
+function cropOutputFormat(action, fileName) {
+  const ext = (fileName || "").split(".").pop().toLowerCase();
+  if (action === "keep" && (ext === "jpg" || ext === "jpeg")) {
+    return { mime: "image/jpeg", quality: 0.92 };
+  }
+  return { mime: "image/png", quality: undefined };
+}
+
+async function imageDataFromCrop(crop, action, fileName) {
   const output = document.createElement("canvas");
   output.width = crop.width;
   output.height = crop.height;
@@ -425,7 +477,8 @@ async function imageDataFromCrop(crop) {
     crop.width,
     crop.height
   );
-  return output.toDataURL("image/png");
+  const format = cropOutputFormat(action, fileName);
+  return output.toDataURL(format.mime, format.quality);
 }
 
 async function confirmCrop() {
@@ -435,18 +488,20 @@ async function confirmCrop() {
   state.busy = true;
   try {
     const crop = cropToNatural();
-    const imageBase64 = await imageDataFromCrop(crop);
+    const body = {
+      action: state.pendingAction,
+      sourceName: file.name,
+      crop
+    };
+    if (crop.mode !== "full") {
+      body.imageBase64 = await imageDataFromCrop(crop, state.pendingAction, file.name);
+    }
     const payload = await api("/api/classify", {
       method: "POST",
-      body: JSON.stringify({
-        action: state.pendingAction,
-        sourceName: file.name,
-        crop,
-        imageBase64
-      })
+      body: JSON.stringify(body)
     });
     applyPayload(payload);
-    toast("已分類並保存裁剪圖");
+    toast(crop.mode === "full" ? "已分類並保留原檔" : "已分類並保存裁剪圖");
   } catch (error) {
     toast(error.message);
   } finally {
@@ -674,9 +729,15 @@ els.cropTools.addEventListener("click", (event) => {
 });
 
 els.resumeButton.addEventListener("click", () => {
+  if (state.statsView) {
+    hideSummary();
+    return;
+  }
   if (state.session?.complete) return;
   resume();
 });
+
+els.mainImage.addEventListener("load", updateImageInfo);
 
 window.addEventListener("resize", () => {
   if (state.mode === "crop") setupCropCanvas();
@@ -689,6 +750,14 @@ document.addEventListener("keydown", (event) => {
   const key = event.key.toLowerCase();
   const repeatable = ["arrowleft", "arrowright", "arrowup", "arrowdown", "a", "d"].includes(key);
   if (event.repeat && !repeatable) return;
+
+  if (!els.summaryPanel.hidden && state.statsView) {
+    if (key === "s" || key === "escape") {
+      event.preventDefault();
+      hideSummary();
+    }
+    return;
+  }
 
   if (!els.summaryPanel.hidden && key !== "p") {
     if (key === "escape" || key === "enter" || key === " ") {
@@ -722,6 +791,7 @@ document.addEventListener("keydown", (event) => {
   if (key === "r") classifyDirect("trash-candidate");
   if (key === "z") undo();
   if (key === "p") pause();
+  if (key === "s") openStatsView();
   if (key === "g" && event.shiftKey) cancelGroup();
   if (key === "g" && !event.shiftKey) toggleGroup();
   if (key === "arrowleft" || key === "a") moveIndex(-1);
