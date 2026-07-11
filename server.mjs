@@ -98,7 +98,17 @@ async function readJson(filePath) {
 
 async function writeJson(filePath, data) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  const tmpPath = `${filePath}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  await fs.rename(tmpPath, filePath);
+}
+
+let mutationQueue = Promise.resolve();
+
+function enqueueMutation(task) {
+  const run = mutationQueue.then(task);
+  mutationQueue = run.catch(() => {});
+  return run;
 }
 
 function safeName(name) {
@@ -146,6 +156,13 @@ async function uniquePath(dir, fileName) {
   return candidate;
 }
 
+function inputFileEntry(name) {
+  return {
+    name,
+    url: `/api/image?name=${encodeURIComponent(name)}`
+  };
+}
+
 async function listInputImages() {
   const entries = await fs.readdir(DIRS.input, { withFileTypes: true });
   const files = [];
@@ -153,14 +170,7 @@ async function listInputImages() {
     if (!entry.isFile()) continue;
     const ext = path.extname(entry.name).toLowerCase();
     if (!supportedExtensions.has(ext)) continue;
-    const fullPath = path.join(DIRS.input, entry.name);
-    const stat = await fs.stat(fullPath);
-    files.push({
-      name: entry.name,
-      size: stat.size,
-      modifiedAt: stat.mtime.toISOString(),
-      url: `/api/image?name=${encodeURIComponent(entry.name)}`
-    });
+    files.push(inputFileEntry(entry.name));
   }
   files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
   return files;
@@ -174,13 +184,15 @@ function normalizeState(raw, files) {
   const fileNames = files.map((file) => file.name);
   if (!raw || typeof raw !== "object") return defaultState(files);
 
-  const order = Array.isArray(raw.fileOrder) ? raw.fileOrder.filter((name) => fileNames.includes(name)) : [];
+  const fileNameSet = new Set(fileNames);
+  const order = Array.isArray(raw.fileOrder) ? raw.fileOrder.filter((name) => fileNameSet.has(name)) : [];
+  const orderSet = new Set(order);
   for (const name of fileNames) {
-    if (!order.includes(name)) order.push(name);
+    if (!orderSet.has(name)) order.push(name);
   }
 
-  let currentFile = raw.currentFile && fileNames.includes(raw.currentFile) ? raw.currentFile : null;
-  if (!currentFile) currentFile = order.find((name) => fileNames.includes(name)) || fileNames[0] || null;
+  let currentFile = raw.currentFile && fileNameSet.has(raw.currentFile) ? raw.currentFile : null;
+  if (!currentFile) currentFile = order[0] || null;
 
   return {
     batch: raw.batch || todayBatch(),
@@ -207,9 +219,13 @@ function normalizeActiveGroup(group) {
 
 async function loadState(files) {
   const raw = await readJson(statePath);
-  const state = normalizeState(raw, files);
-  await saveState(state);
-  return state;
+  if (raw && typeof raw === "object" && raw.batch && raw.batch !== todayBatch() && files.length === 0) {
+    await writeJson(path.join(DIRS.logs, `state-archived-${raw.batch}.json`), raw);
+    const state = defaultState(files);
+    await saveState(state);
+    return state;
+  }
+  return normalizeState(raw, files);
 }
 
 async function saveState(state) {
@@ -221,12 +237,19 @@ async function saveState(state) {
 
 function remainingFilesFromState(state, files) {
   const byName = new Map(files.map((file) => [file.name, file]));
+  const seen = new Set();
   const orderedNames = [];
   for (const name of state.fileOrder || []) {
-    if (byName.has(name) && !orderedNames.includes(name)) orderedNames.push(name);
+    if (byName.has(name) && !seen.has(name)) {
+      seen.add(name);
+      orderedNames.push(name);
+    }
   }
   for (const file of files) {
-    if (!orderedNames.includes(file.name)) orderedNames.push(file.name);
+    if (!seen.has(file.name)) {
+      seen.add(file.name);
+      orderedNames.push(file.name);
+    }
   }
   return orderedNames.map((name) => byName.get(name)).filter(Boolean);
 }
@@ -240,19 +263,22 @@ function nextCurrentFileFromOrder(previousOrder, files, previousName) {
   const tempState = { fileOrder: previousOrder };
   const ordered = remainingFilesFromState(tempState, files);
   if (ordered.length === 0) return null;
+  const orderedNames = new Set(ordered.map((file) => file.name));
   const previousIndex = previousOrder.indexOf(previousName);
   if (previousIndex >= 0) {
     for (let i = previousIndex; i < previousOrder.length; i += 1) {
-      if (ordered.some((file) => file.name === previousOrder[i])) return previousOrder[i];
+      if (orderedNames.has(previousOrder[i])) return previousOrder[i];
     }
   }
   return ordered[0].name;
 }
 
 function updatedFileOrder(previousOrder, files) {
-  const nextOrder = previousOrder.filter((name) => files.some((file) => file.name === name));
+  const fileNameSet = new Set(files.map((file) => file.name));
+  const nextOrder = previousOrder.filter((name) => fileNameSet.has(name));
+  const nextOrderSet = new Set(nextOrder);
   for (const file of files) {
-    if (!nextOrder.includes(file.name)) nextOrder.push(file.name);
+    if (!nextOrderSet.has(file.name)) nextOrder.push(file.name);
   }
   return nextOrder;
 }
@@ -263,8 +289,7 @@ async function appendLog(batch, record) {
   await fs.appendFile(logPath, `${JSON.stringify({ timestamp: nowIso(), batch, ...record })}\n`, "utf8");
 }
 
-function summary(state, files) {
-  const remaining = remainingFilesFromState(state, files);
+function summary(state, remaining) {
   return {
     batch: state.batch,
     currentFile: state.currentFile,
@@ -286,13 +311,10 @@ function summary(state, files) {
   };
 }
 
-async function sessionPayload() {
-  await ensureBaseDirs();
-  const files = await listInputImages();
-  const state = await loadState(files);
+function sessionPayload(state, files) {
   const orderedFiles = remainingFilesFromState(state, files);
   return {
-    session: summary(state, files),
+    session: summary(state, orderedFiles),
     files: orderedFiles
   };
 }
@@ -317,9 +339,20 @@ async function sendJson(response, status, data) {
   response.end(JSON.stringify(data));
 }
 
+const MAX_BODY_BYTES = 50 * 1024 * 1024;
+
 async function readBody(request) {
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > MAX_BODY_BYTES) {
+      const error = new Error("Request body exceeds 50MB limit.");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   return Buffer.concat(chunks).toString("utf8");
 }
 
@@ -350,8 +383,8 @@ async function handleClassify(body) {
   const sourcePath = path.join(DIRS.input, sourceName);
   if (!(await pathExists(sourcePath))) return { status: 404, data: { error: "Source file is not in Input/." } };
 
-  const filesBefore = await listInputImages();
-  const state = await loadState(filesBefore);
+  const files = await listInputImages();
+  const state = await loadState(files);
   const batch = state.batch || todayBatch();
   const config = actionConfig[action];
   const undoRecord = { action, sourceName };
@@ -418,13 +451,13 @@ async function handleClassify(body) {
   }
   state.paused = false;
 
-  const filesAfter = await listInputImages();
+  const filesAfter = files.filter((file) => file.name !== sourceName);
   const previousOrder = state.fileOrder || [];
   state.currentFile = nextCurrentFileFromOrder(previousOrder, filesAfter, sourceName);
   state.fileOrder = updatedFileOrder(previousOrder, filesAfter);
   await saveState(state);
 
-  return { status: 200, data: await sessionPayload() };
+  return { status: 200, data: sessionPayload(state, filesAfter) };
 }
 
 async function restoreToInput(fromRelativePath, preferredName) {
@@ -452,8 +485,8 @@ async function restoreRecord(record) {
 }
 
 async function handleUndo() {
-  const filesBefore = await listInputImages();
-  const state = await loadState(filesBefore);
+  const files = await listInputImages();
+  const state = await loadState(files);
   const record = state.undoStack.pop();
   if (!record) return { status: 400, data: { error: "No undo action available." } };
 
@@ -461,14 +494,15 @@ async function handleUndo() {
   if (!config) return { status: 400, data: { error: "Invalid undo record." } };
 
   const restoredPath = await restoreRecord(record);
+  const restoredName = path.basename(restoredPath);
 
   state.stats[config.stat] = Math.max(0, state.stats[config.stat] - 1);
   state.stats.processed = Math.max(0, state.stats.processed - 1);
   if (record.groupId && state.activeGroup?.id === record.groupId) {
     state.activeGroup.items = state.activeGroup.items.filter((item) => item.outputPath !== record.outputPath);
   }
-  state.currentFile = path.basename(restoredPath);
-  state.fileOrder = [state.currentFile, ...(state.fileOrder || []).filter((name) => name !== state.currentFile)];
+  state.currentFile = restoredName;
+  state.fileOrder = [restoredName, ...(state.fileOrder || []).filter((name) => name !== restoredName)];
   state.paused = false;
 
   await appendLog(state.batch, {
@@ -478,7 +512,8 @@ async function handleUndo() {
   });
   await saveState(state);
 
-  return { status: 200, data: await sessionPayload() };
+  const filesAfter = [inputFileEntry(restoredName), ...files.filter((file) => file.name !== restoredName)];
+  return { status: 200, data: sessionPayload(state, filesAfter) };
 }
 
 async function handlePause() {
@@ -487,7 +522,16 @@ async function handlePause() {
   state.paused = true;
   await appendLog(state.batch, { action: "pause", current_file: state.currentFile });
   await saveState(state);
-  return { status: 200, data: await sessionPayload() };
+  return { status: 200, data: sessionPayload(state, files) };
+}
+
+async function handleResume() {
+  const files = await listInputImages();
+  const state = await loadState(files);
+  state.paused = false;
+  await appendLog(state.batch, { action: "resume", current_file: state.currentFile });
+  await saveState(state);
+  return { status: 200, data: sessionPayload(state, files) };
 }
 
 async function handleStartGroup() {
@@ -511,7 +555,7 @@ async function handleStartGroup() {
     current_file: state.currentFile
   });
   await saveState(state);
-  return { status: 200, data: await sessionPayload() };
+  return { status: 200, data: sessionPayload(state, files) };
 }
 
 async function handleEndGroup() {
@@ -529,7 +573,7 @@ async function handleEndGroup() {
     item_count: group.items.length
   });
   await saveState(state);
-  return { status: 200, data: await sessionPayload() };
+  return { status: 200, data: sessionPayload(state, files) };
 }
 
 async function handleCancelGroup() {
@@ -538,37 +582,40 @@ async function handleCancelGroup() {
   if (!state.activeGroup) return { status: 400, data: { error: "No active group." } };
 
   const group = state.activeGroup;
+  const itemCount = group.items.length;
   const restoredNames = [];
   for (const record of [...group.items].reverse()) {
     const restoredPath = await restoreRecord(record);
-    restoredNames.unshift(path.basename(restoredPath));
+    const restoredName = path.basename(restoredPath);
+    restoredNames.unshift(restoredName);
     state.stats.extractText = Math.max(0, state.stats.extractText - 1);
     state.stats.processed = Math.max(0, state.stats.processed - 1);
+    state.activeGroup.items = state.activeGroup.items.filter((item) => item.outputPath !== record.outputPath);
+    state.undoStack = (state.undoStack || []).filter((item) => item.outputPath !== record.outputPath);
+    state.currentFile = restoredName;
+    state.fileOrder = [restoredName, ...(state.fileOrder || [])];
+    await saveState(state);
   }
 
-  state.undoStack = (state.undoStack || []).filter((record) => record.groupId !== group.id);
   state.activeGroup = null;
-  state.currentFile = restoredNames[0] || state.currentFile;
-  state.fileOrder = [
-    ...restoredNames,
-    ...(state.fileOrder || []).filter((name) => !restoredNames.includes(name))
-  ];
   state.paused = false;
 
   await appendLog(state.batch, {
     action: "cancel-group",
     group_id: group.id,
     restored: restoredNames,
-    item_count: group.items.length
+    item_count: itemCount
   });
   await saveState(state);
-  return { status: 200, data: await sessionPayload() };
+
+  const filesAfter = [...restoredNames.map(inputFileEntry), ...files];
+  return { status: 200, data: sessionPayload(state, filesAfter) };
 }
 
 async function serveStatic(response, urlPath) {
   const fileName = urlPath === "/" ? "index.html" : urlPath.slice(1);
   const requestedPath = path.normalize(path.join(DIRS.public, fileName));
-  if (!requestedPath.startsWith(DIRS.public)) {
+  if (!requestedPath.startsWith(DIRS.public + path.sep)) {
     response.writeHead(403);
     response.end("Forbidden");
     return;
@@ -591,7 +638,9 @@ async function route(request, response) {
 
   try {
     if (request.method === "GET" && url.pathname === "/api/session") {
-      await sendJson(response, 200, await sessionPayload());
+      const files = await listInputImages();
+      const state = await loadState(files);
+      await sendJson(response, 200, sessionPayload(state, files));
       return;
     }
 
@@ -616,37 +665,44 @@ async function route(request, response) {
     }
 
     if (request.method === "POST" && url.pathname === "/api/classify") {
-      const result = await handleClassify(await parseJsonBody(request));
+      const body = await parseJsonBody(request);
+      const result = await enqueueMutation(() => handleClassify(body));
       await sendJson(response, result.status, result.data);
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/undo") {
-      const result = await handleUndo();
+      const result = await enqueueMutation(() => handleUndo());
       await sendJson(response, result.status, result.data);
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/pause") {
-      const result = await handlePause();
+      const result = await enqueueMutation(() => handlePause());
+      await sendJson(response, result.status, result.data);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/resume") {
+      const result = await enqueueMutation(() => handleResume());
       await sendJson(response, result.status, result.data);
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/group/start") {
-      const result = await handleStartGroup();
+      const result = await enqueueMutation(() => handleStartGroup());
       await sendJson(response, result.status, result.data);
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/group/end") {
-      const result = await handleEndGroup();
+      const result = await enqueueMutation(() => handleEndGroup());
       await sendJson(response, result.status, result.data);
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/group/cancel") {
-      const result = await handleCancelGroup();
+      const result = await enqueueMutation(() => handleCancelGroup());
       await sendJson(response, result.status, result.data);
       return;
     }
@@ -659,13 +715,13 @@ async function route(request, response) {
     await sendJson(response, 405, { error: "Method not allowed." });
   } catch (error) {
     console.error(error);
-    await sendJson(response, 500, { error: error.message || "Internal server error." });
+    await sendJson(response, error.statusCode || 500, { error: error.message || "Internal server error." });
   }
 }
 
 await ensureBaseDirs();
 
-createServer(route).listen(PORT, () => {
+createServer(route).listen(PORT, "127.0.0.1", () => {
   console.log(`Screenshot triage tool is running at http://localhost:${PORT}`);
   console.log(`Input folder: ${DIRS.input}`);
 });

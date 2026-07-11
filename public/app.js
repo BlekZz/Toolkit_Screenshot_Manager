@@ -250,14 +250,41 @@ function exitCropMode() {
   renderActionHints();
 }
 
+function measureMainImage() {
+  const imageHidden = els.mainImage.hidden;
+  if (imageHidden) {
+    els.cropCanvas.hidden = true;
+    els.mainImage.hidden = false;
+  }
+  const rect = els.mainImage.getBoundingClientRect();
+  if (imageHidden) {
+    els.mainImage.hidden = true;
+    els.cropCanvas.hidden = false;
+  }
+  return rect;
+}
+
 function setupCropCanvas() {
   if (state.mode !== "crop") return;
-  const rect = els.mainImage.getBoundingClientRect();
+  const rect = measureMainImage();
+  if (rect.width === 0 || rect.height === 0) return;
   const dpr = window.devicePixelRatio || 1;
+  const previousWidth = els.cropCanvas.width;
+  const previousHeight = els.cropCanvas.height;
   els.cropCanvas.style.width = `${rect.width}px`;
   els.cropCanvas.style.height = `${rect.height}px`;
   els.cropCanvas.width = Math.round(rect.width * dpr);
   els.cropCanvas.height = Math.round(rect.height * dpr);
+  if (state.crop && previousWidth > 0 && previousHeight > 0) {
+    const scaleX = els.cropCanvas.width / previousWidth;
+    const scaleY = els.cropCanvas.height / previousHeight;
+    state.crop = {
+      x: state.crop.x * scaleX,
+      y: state.crop.y * scaleY,
+      width: state.crop.width * scaleX,
+      height: state.crop.height * scaleY
+    };
+  }
   drawCropCanvas();
 }
 
@@ -474,6 +501,20 @@ async function pause() {
   }
 }
 
+async function resume() {
+  if (state.busy) return;
+  state.busy = true;
+  try {
+    const payload = await api("/api/resume", { method: "POST", body: "{}" });
+    applyPayload(payload);
+    hideSummary();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    state.busy = false;
+  }
+}
+
 async function startGroup() {
   if (state.busy || state.mode !== "browse") return;
   state.busy = true;
@@ -634,9 +675,7 @@ els.cropTools.addEventListener("click", (event) => {
 
 els.resumeButton.addEventListener("click", () => {
   if (state.session?.complete) return;
-  if (state.session) state.session.paused = false;
-  hideSummary();
-  render();
+  resume();
 });
 
 window.addEventListener("resize", () => {

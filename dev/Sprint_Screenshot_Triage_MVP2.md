@@ -1,7 +1,16 @@
-# Plan：截圖分流工具 MVP2
+# Sprint：截圖分流工具 MVP2
 
 > 建立日期：2026-07-11。依 [[Spec_Screenshot_Triage_MVP1]] 驗收結果、架構審查與功能規劃綜合而成。
-> 本文件為 Plan 階段；承諾執行時依慣例更名為 `Sprint_Screenshot_Triage_MVP2.md` 並在文件內追蹤進度。
+> 2026-07-11 承諾執行，由 Plan 更名為 Sprint。進度在本文件內追蹤。
+
+## 進度追蹤
+
+| 里程碑 | 狀態 | 備註 |
+|---|---|---|
+| M0 穩定性與效能修復包 | ✅ 完成 | 2026-07-11 完成，沙箱回歸驗收通過（見 M0 驗收紀錄） |
+| M1 OCR 批次管線 | ⬜ 未開始 | 前置：OCR 引擎選型 spike |
+| M2 資料夾生命週期指令 | ⬜ 未開始 | |
+| M3 審閱效率與輸出品質包 | ⬜ 未開始 | |
 
 ## 1. 背景與現況
 
@@ -45,12 +54,19 @@ MVP2 建議收斂為 **M0 + M1 + M2 + M3**。
 9. **`serveStatic` prefix check 補 `path.sep`**（`server.mjs:570-571`）：防禦性修正。
 
 QA / 驗收條件：
-- [ ] `netstat` 確認僅監聽 127.0.0.1。
-- [ ] crop 模式中縮放視窗，裁剪框仍正確可用。
-- [ ] 暫停 → 繼續 → F5 重新整理，不再出現暫停畫面。
-- [ ] 1,000 張圖下單次分類操作的 server 處理時間顯著下降（目錄掃描一次、state 寫入一次）。
-- [ ] 寫入中途 kill process 後重啟，state 不損毀（tmp+rename 生效）。
-- [ ] MVP1 全部既有行為（Q/W/E/R/Z/G/P、group、undo、續傳）回歸通過。
+- [x] `netstat` 確認僅監聽 127.0.0.1。
+- [ ] crop 模式中縮放視窗，裁剪框仍正確可用。（⚠️ 邏輯經獨立 code review 確認正確，但未經瀏覽器實測 — 待使用者真機人工確認）
+- [x] 暫停 → 繼續 → F5 重新整理，不再出現暫停畫面。（新增 POST /api/resume，server 端驗證通過）
+- [x] 1,000 張圖下單次分類操作的 server 處理時間顯著下降。（GET /api/session 實測 6ms；雙掃描與 O(n²) 消除經 code 層確認）
+- [x] 寫入中途 kill process 後重啟，state 不損毀（tmp+rename 生效，沙箱實證零 .tmp 殘留）。
+- [x] MVP1 全部既有行為（Q/W/E/R/Z/G/P、group、undo、續傳）回歸通過。（沙箱 API 層全流程回歸 a–i 通過，含併發 4 classify 序列化煙測）
+
+### M0 驗收紀錄（2026-07-11）
+
+- 實作與驗收由不同 agent 執行（fresh-context 沙箱回歸），總判定 ✅ 通過，無阻擋級問題。
+- 驗收後補修兩項備註級發現：resume 動作補寫 JSONL log（與 pause 對稱）；batch 換日時舊 state 歸檔至 `logs/state-archived-<batch>.json` 再重置。
+- 已知並接受的殘餘風險：換日重置的 state 寫入發生在 GET /api/session 路徑、不經 mutation queue，理論競態條件為「跨日瞬間 + Input 空 + 併發 mutation」，極罕見，不處理。
+- 待人工確認：crop 模式中拖拉視窗大小後裁剪框行為（唯一未經真機驗證項）。
 
 明確不做（過度工程警告，架構審查結論）：
 - 不引入 Express/React 等框架、不上 SQLite、不做 auth/HTTPS、不做 WebSocket 多分頁同步、不改 multipart 上傳、不擴 undo stack 架構、不全面 TypeScript 化。
