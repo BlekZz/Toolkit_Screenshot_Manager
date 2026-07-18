@@ -1,6 +1,6 @@
 # Sprint：截圖分流工具 MVP2
 
-> 建立日期：2026-07-11。依 [[Spec_Screenshot_Triage_MVP1]] 驗收結果、架構審查與功能規劃綜合而成。
+> 建立日期：2026-07-11。依 [[ArchDesign_Screenshot_Triage_MVP1]] 驗收結果、架構審查與功能規劃綜合而成。
 > 2026-07-11 承諾執行，由 Plan 更名為 Sprint。進度在本文件內追蹤。
 
 ## 進度追蹤
@@ -15,7 +15,7 @@
 
 ## 1. 背景與現況
 
-- MVP1 已實作完成，§14 驗收 12 條中 11 條達成（詳見 [[Spec_Screenshot_Triage_MVP1]] 變更紀錄）。
+- MVP1 已實作完成，§14 驗收 12 條中 11 條達成（詳見 [[ArchDesign_Screenshot_Triage_MVP1]] 變更紀錄）。
 - 架構審查結論：程式碼品質良好（路徑防護、uniquePath、JSONL log、undo 設計皆正確），但存在一批穩定性/效能問題需優先處理（見 M0）。
 - 價值鏈斷點：staging 四個資料夾目前只進不出 — `extract-text` 的 OCR 消化（工具存在的核心理由）、`trash-candidate` 的清理、`review-later` 的回流機制皆未存在。
 
@@ -216,7 +216,7 @@ QA：
 - [x] M0 全部 QA 通過，MVP1 行為回歸無退化。（唯 crop 視窗縮放待真機人工確認）
 - [x] 一批真實截圖可走完完整價值鏈：Input → Q 分流 → `npm run extract` → markdown 產出 → pending-delete。（2026-07-11 真實資料完成：首跑 + M6 品質升級後全批重跑 37 張，35 extracted / 2 low-yield，零 error）
 - [x] 四個 staging 資料夾各自有可執行的出口（extract / requeue / purge / status 可見）。
-- [x] README 與 [[Spec_Screenshot_Triage_MVP1]] 同步更新至 MVP2 實際行為。
+- [x] README 與 [[ArchDesign_Screenshot_Triage_MVP1]] 同步更新至 MVP2 實際行為。
 
 ### Sprint 收尾狀態（2026-07-11）
 
