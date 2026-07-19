@@ -1,0 +1,4 @@
+- updated: 2026-07-19 (claude)
+- 停點: Screenshot Triage MVP2 sprint 執行中（os-conform 複核判定執行中不改名，保留 Sprint_ 前綴）；MVP1 已驗收（ArchDesign_Screenshot_Triage_MVP1.md）。
+- 下一步: 依 dev/Sprint_Screenshot_Triage_MVP2.md 的里程碑清單繼續推進。
+- 切入: dev/Sprint_Screenshot_Triage_MVP2.md, dev/ArchDesign_Screenshot_Triage_MVP1.md
