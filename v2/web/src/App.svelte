@@ -8,7 +8,7 @@
   import Prompt from './components/Prompt.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import { api, formatBytes, prefs } from './lib/api.js';
-  import { decodeHash, encodeHash, indexCatalog, isEmpty, soleAlbum, toPayload } from './lib/filter.js';
+  import { decodeHash, encodeHash, indexCatalog, isEmpty, pruneFilter, soleAlbum, toPayload } from './lib/filter.js';
 
   const BASE_SORTS = [
     { key: 'imported:desc', label: '匯入時間（新→舊）' },
@@ -66,8 +66,12 @@
       if (loupeIndex >= ids.length) loupeIndex = ids.length ? ids.length - 1 : -1;
     } catch (e) {
       if (mine !== seq) return;
-      if (/fetch|network/i.test(e.message)) loadError = e.message;
-      else queryError = e.message;
+      if (/fetch|network/i.test(e.message)) { loadError = e.message; return; }
+      // Never leave the previous result on screen under a broken query — it reads as this view's content.
+      queryError = e.message;
+      ids = [];
+      facets = null;
+      selected = new Set();
     }
   }
 
@@ -75,6 +79,8 @@
     try {
       catalog = await api.catalog();
       stats = await api.stats();
+      const pruned = pruneFilter(filter, catalog);
+      if (pruned !== filter) filter = pruned;
     } catch (e) {
       loadError = e.message;
     }

@@ -409,6 +409,12 @@ export function createCatalog(db) {
 
   function deleteSmart(id) {
     const s = requireRow(q.smart, id, 'smart album');
+    const refersTo = (node) => node && typeof node === 'object' && (
+      (node.op === 'smart' && Number(node.id) === s.id)
+      || (Array.isArray(node.args) && node.args.some(refersTo))
+      || refersTo(node.arg));
+    const users = listSmart().filter((o) => o.id !== s.id && refersTo(o.query)).map((o) => o.name);
+    if (users.length) throw bad(`smart album is used by: ${users.join(', ')}`, 409);
     db.prepare('DELETE FROM smart_albums WHERE id = ?').run(s.id);
     logEvent(db, 'smart.delete', { id: s.id, name: s.name, query_json: s.query_json });
     return { deleted: true };

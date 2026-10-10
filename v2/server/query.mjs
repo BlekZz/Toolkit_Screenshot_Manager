@@ -44,11 +44,17 @@ function tokenize(input) {
     let colon = -1;
     while (i < input.length && !/[\s()]/.test(input[i])) {
       if (input[i] === '"') {
-        const end = input.indexOf('"', i + 1);
-        if (end < 0) throw bad('unterminated quote');
-        raw += input.slice(i + 1, end);
+        // Inside quotes, \" is a literal quote and \\ a literal backslash.
+        let j = i + 1;
+        let closed = false;
+        while (j < input.length) {
+          if (input[j] === '\\' && (input[j + 1] === '"' || input[j + 1] === '\\')) { raw += input[j + 1]; j += 2; continue; }
+          if (input[j] === '"') { closed = true; break; }
+          raw += input[j++];
+        }
+        if (!closed) throw bad('unterminated quote');
         quoted = true;
-        i = end + 1;
+        i = j + 1;
       } else {
         if (input[i] === ':' && colon < 0 && !quoted) colon = raw.length;
         raw += input[i++];

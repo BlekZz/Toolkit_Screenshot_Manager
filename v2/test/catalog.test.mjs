@@ -253,3 +253,53 @@ describe('parser (unit)', () => {
     assert.deepEqual(parseQuery('tag:a or "and"', r), { op: 'or', args: [{ op: 'tag', id: 1 }, { op: 'text', q: 'and' }] });
   });
 });
+
+describe('acceptance follow-ups', () => {
+  test('parent facet counts an asset once even with two tags in its subtree', async () => {
+    const x = await ok('POST', '/api/tags', { name: '去重/x' });
+    const y = await ok('POST', '/api/tags', { name: '去重/y' });
+    const top = (await ok('GET', '/api/tags')).find((t) => t.name === '去重').id;
+    await ok('POST', '/api/tags/apply', { asset_ids: [1], add: [x.id, y.id, top] });
+    const fc = await ok('POST', '/api/facets', {});
+    assert.equal(fc.tags[top], 1);
+    await ok('DELETE', `/api/tags/${top}`);
+  });
+
+  test('deleting a tag really removes its descendants', async () => {
+    const leaf = await ok('POST', '/api/tags', { name: '串/中/葉' });
+    const top = (await ok('GET', '/api/tags')).find((t) => t.name === '串').id;
+    await ok('DELETE', `/api/tags/${top}`);
+    const left = (await ok('GET', '/api/tags')).filter((t) => ['串', '中', '葉'].includes(t.name) || t.id === leaf.id);
+    assert.deepEqual(left, []);
+  });
+
+  test('smart albums nested beyond the depth limit are rejected', async () => {
+    let prev = await ok('POST', '/api/smart', { name: 'd0', q: 'has:tag' });
+    const made = [prev];
+    let rejected = null;
+    for (let i = 1; i <= 10 && !rejected; i++) {
+      const r = await call('POST', '/api/smart', { name: `d${i}`, q: `smart:#${prev.id}` });
+      if (r.status === 400) rejected = i;
+      else { prev = r.body; made.push(prev); }
+    }
+    assert.equal(rejected, 9, 'a chain of 8 smart references saves; the 9th exceeds MAX_SMART_DEPTH');
+    for (const s of made.reverse()) await ok('DELETE', `/api/smart/${s.id}`);
+  });
+
+  test('a smart album referenced by another cannot be deleted', async () => {
+    const base = await ok('POST', '/api/smart', { name: 'base', q: 'has:tag' });
+    const user = await ok('POST', '/api/smart', { name: 'user', q: `smart:#${base.id} -album:X` });
+    const r = await call('DELETE', `/api/smart/${base.id}`);
+    assert.equal(r.status, 409);
+    assert.match(r.body.message, /user/);
+    await ok('DELETE', `/api/smart/${user.id}`);
+    await ok('DELETE', `/api/smart/${base.id}`);
+  });
+
+  test('quoted names support \\" and \\\\ escapes', async () => {
+    const al = await ok('POST', '/api/albums', { name: 'say "hi" \\ bye' });
+    await ok('POST', `/api/albums/${al.id}/add`, { asset_ids: [3] });
+    assert.deepEqual(await queryQ('album:"say \\"hi\\" \\\\ bye"'), [3]);
+    await ok('DELETE', `/api/albums/${al.id}`);
+  });
+});

@@ -87,6 +87,23 @@ export function decodeHash(hash) {
   }
 }
 
+/**
+ * Drops filter entries that point at tags / albums / smart albums that no
+ * longer exist (e.g. a deleted parent tag took its children with it).
+ * Returns the same object when nothing changed.
+ */
+export function pruneFilter(f, cat) {
+  const tagIds = new Set(cat.tags.map((t) => t.id));
+  const albumIds = new Set(cat.albums.map((a) => a.id));
+  const keep = (states, ids) => Object.fromEntries(Object.entries(states).filter(([id]) => ids.has(Number(id))));
+  const tags = keep(f.tags, tagIds);
+  const albums = keep(f.albums, albumIds);
+  const smart = Number.isInteger(f.smart) && !cat.smart.some((s) => s.id === f.smart) ? null : f.smart;
+  const changed = Object.keys(tags).length !== Object.keys(f.tags).length
+    || Object.keys(albums).length !== Object.keys(f.albums).length || smart !== f.smart;
+  return changed ? { ...f, tags, albums, smart } : f;
+}
+
 /** Lookup maps and full display paths for the sidebar catalogue. */
 export function indexCatalog(cat) {
   const tagById = new Map(cat.tags.map((t) => [t.id, t]));
