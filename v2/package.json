@@ -1,0 +1,26 @@
+{
+  "name": "photo-library-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server/index.mjs",
+    "dev:web": "vite",
+    "build": "vite build",
+    "import": "node cli/import.mjs",
+    "test": "node --test --test-reporter=spec \"test/*.test.mjs\""
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.6",
+    "fastify": "^5.12.5",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "svelte": "^5.57.2",
+    "vite": "^8.3.4"
+  }
+}
