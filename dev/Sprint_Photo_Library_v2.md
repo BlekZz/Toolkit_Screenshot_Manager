@@ -8,8 +8,8 @@
 | 里程碑 | 狀態 | 備註 |
 |---|---|---|
 | Spike（§9.1） | ✅ 完成 | 2026-10-11：node:sqlite / sharp / Svelte 5 定案 |
-| P0 地基 | 🔄 進行中 | |
-| P1 歸類與 filter | ⏳ | |
+| P0 地基 | 🔄 實作完成，獨立驗收中 | 2026-10-11：後端 16 測試全綠（含 dedupe mutation 轉紅驗證）；真實 `Input/` 964 張 15s 匯入零錯誤（scratch library）；瀏覽器煙測 grid / 多選 / loupe 縮放換張 OK |
+| P1 歸類與 filter | 🔄 進行中 | |
 | P2 Triage 與裁剪 | ⏳ | |
 | P2.5 Migration | ⏳ | |
 | P3 文字整合 | ⏳ | |

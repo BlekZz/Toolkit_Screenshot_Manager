@@ -6,16 +6,13 @@ import fastifyStatic from '@fastify/static';
 import { assetFilePath, openLibrary } from './library.mjs';
 import { importFolder, validateSource } from './importer.mjs';
 import { ensureThumb, THUMB_SIZES } from './thumbs.mjs';
+import { createCatalog } from './catalog.mjs';
+import { registerCatalogRoutes } from './routes-catalog.mjs';
 
 const DIST_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 export const HOST = '127.0.0.1';
 
 const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
-const SORTS = {
-  imported: 'imported_at',
-  mtime: 'file_mtime',
-  name: 'filename COLLATE NOCASE',
-};
 
 /**
  * Builds the Fastify app bound to one library.
@@ -51,14 +48,15 @@ export async function buildApp({ libraryDir, logger = false }) {
     return Object.fromEntries(rows.map((r) => [r.status, { count: r.n, bytes: r.bytes }]));
   });
 
-  /** Ordered id list of the current view; the grid virtualises over it. */
+  const catalog = createCatalog(lib.db);
+  registerCatalogRoutes(app, catalog);
+
+  /** Ordered id list of the current view (optional ?q= filter); the grid virtualises over it. */
   app.get('/api/assets', async (req) => {
-    const sortKey = SORTS[req.query.sort] ? req.query.sort : 'imported';
-    const order = req.query.order === 'asc' ? 'ASC' : 'DESC';
-    const ids = lib.db.prepare(
-      `SELECT id FROM assets WHERE status = 'active' ORDER BY ${SORTS[sortKey]} ${order}, id ${order}`,
-    ).all().map((r) => r.id);
-    return { total: ids.length, sort: sortKey, order: order.toLowerCase(), ids };
+    const sort = ['imported', 'mtime', 'name'].includes(req.query.sort) ? req.query.sort : 'imported';
+    const order = req.query.order === 'asc' ? 'asc' : 'desc';
+    const { total, ids } = catalog.query({ q: req.query.q, sort, order });
+    return { total, sort, order, ids };
   });
 
   app.get('/api/assets/:id', async (req) => {
@@ -67,6 +65,7 @@ export async function buildApp({ libraryDir, logger = false }) {
       id: a.id, filename: a.filename, ext: a.ext, width: a.width, height: a.height, bytes: a.bytes,
       sha256: a.sha256, file_mtime: a.file_mtime, imported_at: a.imported_at,
       source_path: a.source_path, status: a.status, rating: a.rating, note: a.note,
+      ...catalog.assetMembership(a.id),
     };
   });
 
