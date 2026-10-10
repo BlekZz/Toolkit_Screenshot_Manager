@@ -1,7 +1,19 @@
-# Plan：Photo Library v2（截圖照片庫重建）
+# Sprint：Photo Library v2（截圖照片庫重建）
 
-> 建立日期：2026-10-11。狀態：**Plan（規劃中，尚未承諾執行）**。
-> 決定執行時更名為 `Sprint_Photo_Library_v2`。與 [[Sprint_Screenshot_Triage_MVP2]] 並行——舊工具在 v2 完成 P2 並 migration 前持續使用，本計畫不修改舊工具任何檔案。
+> 建立日期：2026-10-11。2026-10-11 承諾執行，由 `Plan_Photo_Library_v2` 更名為 Sprint；進度在本文件內追蹤。
+> 與 [[Sprint_Screenshot_Triage_MVP2]] 並行——舊工具在 v2 完成 P2 並 migration 前持續使用，本計畫不修改舊工具任何檔案。
+
+## 進度追蹤
+
+| 里程碑 | 狀態 | 備註 |
+|---|---|---|
+| Spike（§9.1） | ✅ 完成 | 2026-10-11：node:sqlite / sharp / Svelte 5 定案 |
+| P0 地基 | 🔄 進行中 | |
+| P1 歸類與 filter | ⏳ | |
+| P2 Triage 與裁剪 | ⏳ | |
+| P2.5 Migration | ⏳ | |
+| P3 文字整合 | ⏳ | |
+| P4 加值 | ⏳ | |
 
 ## 1. 目標與定位
 
@@ -175,7 +187,16 @@ Bundle(有序 asset/crop)
 
 > 與 MVP2 Sprint「不上 SQLite、不引入框架」的結論刻意相反：該結論前提是單純分流工具規模，本計畫需求已改變。
 
-**程式碼位置**：v2 放在本 repo 新子目錄 `v2/`（獨立 `package.json`），根層舊工具不動，切換後再收斂（見 §12 待裁）。
+**程式碼位置**（已裁定）：本 repo 子目錄 `v2/`（獨立 `package.json`），根層舊工具不動。**Library 位置**（已裁定）：repo 外，`PHOTO_LIBRARY` 環境變數或 `--library` 指定（本機用 `D:/PhotoLibrary`）。
+
+### 9.1 Spike 結果（2026-10-11，Node v24.20.0，scratchpad 實測）
+
+| 項目 | 實測 | 定案 |
+|---|---|---|
+| SQLite driver | `node:sqlite`（SQLite 3.53.4）零原生相依；5 萬 asset＋15 萬 asset_tags＋FTS 寫入 266ms；`tag AND NOT album` EXISTS 查詢 11.7ms；FTS5 `tokenize='trigram'` 可用（CJK 查詢需 ≥3 字，<3 字退回 LIKE） | **node:sqlite**（免裝 better-sqlite3 原生模組） |
+| 縮圖 | sharp 0.35.5，真實 `Input/` 100 張（PNG/JPG）→ 256px WebP 平均 58ms/張、零失敗；**不支援 BMP** | sharp；縮圖**首次請求時產生並落快取**＋並發上限，匯入不阻塞；BMP 列為不支援格式 |
+| 前端 | 同一 5 萬格虛擬 grid＋Shift 範圍選取：Svelte 5.57 / React 19。捲動 p50 皆 16.7ms（vsync 上限，兩者皆不掉幀）；build 36KB（gzip 14KB）vs 221KB（gzip 69KB）；程式行數相當 | **Svelte 5**（效能打平，以體積與 `bind:clientWidth` 等內建響應式減少樣板取勝） |
+| Server | — | Fastify（未 spike，成熟度足夠） |
 
 ## 10. 里程碑
 
@@ -231,7 +252,5 @@ Bundle(有序 asset/crop)
 
 ## 12. 待裁
 
-- 程式碼位置：本 repo `v2/` 子目錄（建議，migration 腳本可直接讀舊資料夾）vs 另開新 repo。
-- 前端框架 Svelte vs React、SQLite driver `node:sqlite` vs `better-sqlite3`：P0 開工前 spike 定案。
-- library 預設路徑（建議 repo 外，例如 `D:/PhotoLibrary/`）。
-- 雙 album 拖曳時的語意（複製 vs 移動）：預設「加入」（多對多），按住 Shift 拖＝移出原 album。
+- ~~程式碼位置~~ → `v2/`（2026-10-11 裁定）。~~library 路徑~~ → repo 外（2026-10-11 裁定）。~~框架 / driver~~ → spike 定案（§9.1）。
+- 雙 album 拖曳時的語意（複製 vs 移動）：預設「加入」（多對多），按住 Shift 拖＝移出原 album。（P1 實作時確認）

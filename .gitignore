@@ -8,3 +8,5 @@ state/
 .DS_Store
 Thumbs.db
 .claude/settings.local.json
+.playwright-mcp/
+v2/dist/
