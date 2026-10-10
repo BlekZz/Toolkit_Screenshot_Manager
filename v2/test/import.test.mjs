@@ -82,3 +82,34 @@ test('rejects relative path, missing dir, and the library itself', async () => {
   await assert.rejects(importFolder(lib, lib.originalsDir), /inside the library/);
   await assert.rejects(importFolder(lib, libDir), /inside the library/);
 });
+
+test('corrupted copy is rejected: error reported, no row, no orphan file', async () => {
+  const lib3Dir = tempDir('lib3');
+  const lib3 = openLibrary(lib3Dir);
+  try {
+    const corrupt = (from, to) => { fs.copyFileSync(from, to); fs.appendFileSync(to, 'X'); };
+    const r = await importFolder(lib3, src, { recursive: false, copyFile: corrupt });
+    assert.equal(r.imported, 0);
+    assert.ok(r.errors.length > 0 && r.errors.every((e) => /hash mismatch/.test(e.error)), JSON.stringify(r.errors[0]));
+    assert.equal(lib3.db.prepare('SELECT count(*) AS n FROM assets').get().n, 0);
+    const leftovers = fs.readdirSync(lib3.originalsDir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile());
+    assert.deepEqual(leftovers.map((e) => e.name), []);
+  } finally { lib3.db.close(); cleanup(lib3Dir); }
+});
+
+test('importing a parent folder never ingests the library itself', async () => {
+  const parent = tempDir('parent');
+  try {
+    await makeImages(path.join(parent, 'pics'), 3, { offset: 300 });
+    const lib4 = openLibrary(path.join(parent, 'lib'));
+    try {
+      // Plant files that look importable inside the library (originals + thumbnail cache).
+      await makeImages(path.join(lib4.thumbsDir, 'ab'), 2, { offset: 400 });
+      const r = await importFolder(lib4, parent);
+      assert.equal(r.imported, 3);
+      assert.equal(r.scanned, 3);
+      const again = await importFolder(lib4, parent);
+      assert.equal(again.scanned, 3); // its own originals are not re-scanned
+    } finally { lib4.db.close(); }
+  } finally { cleanup(parent); }
+});

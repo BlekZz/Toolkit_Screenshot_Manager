@@ -8,8 +8,18 @@
 | 里程碑 | 狀態 | 備註 |
 |---|---|---|
 | Spike（§9.1） | ✅ 完成 | 2026-10-11：node:sqlite / sharp / Svelte 5 定案 |
-| P0 地基 | 🔄 實作完成，獨立驗收中 | 2026-10-11：後端 16 測試全綠（含 dedupe mutation 轉紅驗證）；真實 `Input/` 964 張 15s 匯入零錯誤（scratch library）；瀏覽器煙測 grid / 多選 / loupe 縮放換張 OK |
-| P1 歸類與 filter | 🔄 進行中 | |
+| P0 地基 | ✅ 完成 | 2026-10-11 獨立驗收通過（見 P0 驗收紀錄） |
+| P1 歸類與 filter | 🔄 實作完成，獨立驗收中 | 2026-10-11：49 測試全綠；query 3 個 mutation、P0 補修 4 個 mutation 全數轉紅；瀏覽器 E2E（964 張真實截圖）OK |
+
+### P0 驗收紀錄（2026-10-11）
+
+- fresh-context agent 驗收 commit `6fa7cfb`（隔離 worktree），8 項全 PASS：CLI＋HTTP 匯入 964＋200 張、1,194 張全量獨立 hash 比對零不符、`Input/` 前後 sha256 manifest 逐行相同、僅監聽 127.0.0.1（LAN IP／[::1] 連線被拒）、5 萬張首屏 cell 117ms／冷縮圖 1.56s、UI 全流程、邊界 400/403/404/409、`npm test` 16/16 與 mutation。
+- 驗收發現並已補修（含新測試＋mutation 轉紅）：
+  1. 冷快取快速捲動時縮圖積壓（FIFO、無取消）→ server 改 LIFO 佇列＋放棄的請求跳過渲染；client 快速捲動時延後請求縮圖。
+  2. 複製後重新驗 hash 的防護沒有測試保護 → 新增壞拷貝測試（`copyFile` test seam）。
+  3. 匯入「包含 library 的上層資料夾」會把縮圖快取當照片匯入 → walk 時跳過 library 目錄。
+  4. 備註：方向鍵移動未更新範圍選取錨點 → 已改為與 Explorer 一致；§4 縮圖路徑文件已更正。
+- 已知未處理（低風險）：CLI 匯入與 server 匯入之間沒有互斥（server 的 409 只管自己的 job）。
 | P2 Triage 與裁剪 | ⏳ | |
 | P2.5 Migration | ⏳ | |
 | P3 文字整合 | ⏳ | |
@@ -86,7 +96,7 @@ settings        (key, value)
 <library>/
   library.db
   originals/<yyyy>/<mm>/<sha256前2碼>/<原檔名>   ← managed 模式
-  thumbs/<sha256>_{256,1024}.webp              ← 可再生快取，不入備份必要集合
+  thumbs/<sha256前2碼>/<sha256>_{256,1024}.webp ← 可再生快取，不入備份必要集合
   exports/                                      ← crop / md 匯出
 ```
 

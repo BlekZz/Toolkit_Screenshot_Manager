@@ -85,7 +85,11 @@ export async function buildApp({ libraryDir, logger = false }) {
     if (!THUMB_SIZES.has(size)) return reply.code(400).send({ error: `size must be one of ${[...THUMB_SIZES]}` });
     const file = assetFilePath(lib, a);
     if (!fs.existsSync(file)) return reply.code(404).send({ error: 'original file missing' });
-    const thumb = await ensureThumb(lib.thumbsDir, file, a.sha256, size);
+    let gone = false;
+    // ServerResponse 'close' before finishing = client dropped the request (scrolled past).
+    reply.raw.once('close', () => { if (!reply.raw.writableFinished) gone = true; });
+    const thumb = await ensureThumb(lib.thumbsDir, file, a.sha256, size, () => !gone);
+    if (!thumb) return reply.code(503).send({ error: 'request abandoned' });
     reply.header('Cache-Control', 'private, max-age=31536000, immutable');
     return reply.type('image/webp').send(fs.createReadStream(thumb));
   });

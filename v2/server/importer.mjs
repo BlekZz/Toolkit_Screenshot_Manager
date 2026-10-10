@@ -29,11 +29,14 @@ export function sha256File(file) {
  * @param {boolean} recursive
  * @returns {string[]} Absolute file paths.
  */
-function walk(dir, recursive) {
+function walk(dir, recursive, skipDir) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) { if (recursive) out.push(...walk(full, true)); }
+    if (entry.isDirectory()) {
+      // Never ingest the library itself (originals, thumbnail cache) when importing a parent folder.
+      if (recursive && path.resolve(full).toLowerCase() !== skipDir) out.push(...walk(full, true, skipDir));
+    }
     else if (entry.isFile()) out.push(full);
   }
   return out.sort((a, b) => a.localeCompare(b));
@@ -74,13 +77,14 @@ export function validateSource(lib, srcDir) {
  *
  * @param {ReturnType<import('./library.mjs').openLibrary>} lib
  * @param {string} srcDir Absolute source directory.
- * @param {{recursive?: boolean, onProgress?: (p: object) => void}} [opts]
+ * @param {{recursive?: boolean, onProgress?: (p: object) => void,
+ *   copyFile?: (src: string, dest: string) => void}} [opts] copyFile is a test seam.
  * @returns {Promise<{scanned: number, imported: number, duplicates: number,
  *   unsupported: string[], errors: {file: string, error: string}[]}>}
  */
-export async function importFolder(lib, srcDir, { recursive = true, onProgress } = {}) {
+export async function importFolder(lib, srcDir, { recursive = true, onProgress, copyFile = fs.copyFileSync } = {}) {
   const source = validateSource(lib, srcDir);
-  const files = walk(source, recursive);
+  const files = walk(source, recursive, path.resolve(lib.dir).toLowerCase());
   const candidates = [];
   const result = { scanned: files.length, imported: 0, duplicates: 0, unsupported: [], errors: [] };
   for (const f of files) {
@@ -110,7 +114,7 @@ export async function importFolder(lib, srcDir, { recursive = true, onProgress }
         fs.mkdirSync(dir, { recursive: true });
         const dest = uniqueDest(dir, path.basename(file));
         const tmp = `${dest}.importing`;
-        fs.copyFileSync(file, tmp);
+        copyFile(file, tmp);
         fs.utimesSync(tmp, stat.atime, stat.mtime);
         if (await sha256File(tmp) !== sha) {
           fs.rmSync(tmp, { force: true });

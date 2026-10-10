@@ -1,11 +1,33 @@
 <script>
   import { thumbUrl } from '../lib/api.js';
+  import { DRAG_TYPE } from '../lib/filter.js';
 
   /**
    * Virtualised thumbnail grid. Only rows intersecting the viewport (plus an
    * overscan margin) are in the DOM, so 50k ids cost the same as 100.
+   * Cells drag (selection or the single cell) onto sidebar albums / tags.
    */
-  let { ids, cellSize = 180, selected = $bindable(new Set()), focus = $bindable(0), onopen } = $props();
+  let { ids, cellSize = 180, selected = $bindable(new Set()), focus = $bindable(0), filtered = false, onopen, oncellcontext } = $props();
+
+  function dragstart(e, i) {
+    const id = ids[i];
+    if (!selected.has(id)) { selected = new Set([id]); focus = i; }
+    const payload = [...selected];
+    e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'copy';
+    const badge = document.createElement('div');
+    badge.textContent = `${payload.length} 張`;
+    badge.style.cssText = 'position:fixed;top:-100px;padding:4px 10px;border-radius:999px;background:#2f6fde;color:#fff;font:600 13px system-ui';
+    document.body.appendChild(badge);
+    e.dataTransfer.setDragImage(badge, 10, 10);
+    setTimeout(() => badge.remove(), 0);
+  }
+
+  function contextmenu(e, i) {
+    e.preventDefault();
+    if (!selected.has(ids[i])) { selected = new Set([ids[i]]); focus = i; }
+    oncellcontext?.(e);
+  }
 
   const GAP = 6;
   const OVERSCAN_ROWS = 3;
@@ -14,6 +36,27 @@
   let width = $state(0);
   let height = $state(0);
   let scrollTop = $state(0);
+
+  // While the user flings through rows faster than thumbnails can render, hold
+  // off on requesting thumbnails for cells that merely fly past; request them
+  // once scrolling settles. Already-loaded thumbnails always show.
+  const FLING_PX_PER_MS = 3;
+  const SETTLE_MS = 120;
+  let flinging = $state(false);
+  const loaded = new Set();
+  let lastScroll = { t: 0, top: 0 };
+  let settleTimer;
+
+  function onscroll() {
+    const now = performance.now();
+    const top = viewport.scrollTop;
+    const speed = Math.abs(top - lastScroll.top) / Math.max(1, now - lastScroll.t);
+    lastScroll = { t: now, top };
+    scrollTop = top;
+    if (speed > FLING_PX_PER_MS) flinging = true;
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => (flinging = false), SETTLE_MS);
+  }
   let anchor = -1;
 
   // cellSize is the target; cells stretch so the columns fill the full width.
@@ -70,6 +113,8 @@
         const s = new Set(e.ctrlKey ? selected : []);
         for (let k = Math.min(anchor, next); k <= Math.max(anchor, next); k++) s.add(ids[k]);
         selected = s;
+      } else {
+        anchor = next; // plain moves re-anchor, like Explorer
       }
       focus = next;
       scrollIntoView(next);
@@ -104,7 +149,7 @@
   bind:this={viewport}
   bind:clientWidth={width}
   bind:clientHeight={height}
-  onscroll={() => (scrollTop = viewport.scrollTop)}
+  onscroll={onscroll}
   data-testid="grid"
 >
   <div class="canvas" style:height="{rows * pitch + GAP}px">
@@ -119,17 +164,26 @@
         style:transform="translate({GAP + (i % cols) * pitch}px, {GAP + Math.floor(i / cols) * pitch}px)"
         onclick={(e) => select(e, i)}
         ondblclick={() => onopen?.(i)}
+        oncontextmenu={(e) => contextmenu(e, i)}
+        draggable="true"
+        ondragstart={(e) => dragstart(e, i)}
         data-id={ids[i]}
         tabindex="-1"
       >
-        <img src={thumbUrl(ids[i], thumbSize)} alt="" loading="lazy" decoding="async" draggable="false" />
+        {#if !flinging || loaded.has(ids[i])}
+          <img src={thumbUrl(ids[i], thumbSize)} alt="" decoding="async" draggable="false" onload={() => loaded.add(ids[i])} />
+        {/if}
       </button>
     {/each}
   </div>
   {#if !ids.length}
-    <div class="empty">
-      <p>照片庫是空的。</p>
-      <p>點右上角「匯入」，或執行 <code>npm run import -- &lt;資料夾&gt;</code>。</p>
+    <div class="empty" data-testid="grid-empty">
+      {#if filtered}
+        <p>沒有符合目前篩選條件的照片。</p>
+      {:else}
+        <p>照片庫是空的。</p>
+        <p>點右上角「匯入」，或執行 <code>npm run import -- &lt;資料夾&gt;</code>。</p>
+      {/if}
     </div>
   {/if}
 </div>

@@ -5,14 +5,40 @@ async function request(url, init) {
   return body;
 }
 
+const send = (method, url, body) => request(url, {
+  method,
+  headers: body === undefined ? {} : { 'content-type': 'application/json' },
+  body: body === undefined ? undefined : JSON.stringify(body),
+});
+
 export const api = {
-  listAssets: (sort, order) => request(`/api/assets?sort=${sort}&order=${order}`),
+  query: (payload) => send('POST', '/api/query', payload),
+  facets: (payload) => send('POST', '/api/facets', payload),
   asset: (id) => request(`/api/assets/${id}`),
   stats: () => request('/api/stats'),
   health: () => request('/api/health'),
-  startImport: (path, recursive) => request('/api/import', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path, recursive }),
-  }),
+  catalog: () => request('/api/catalog'),
+
+  createTag: (body) => send('POST', '/api/tags', body),
+  updateTag: (id, body) => send('PATCH', `/api/tags/${id}`, body),
+  deleteTag: (id) => send('DELETE', `/api/tags/${id}`),
+  applyTags: (body) => send('POST', '/api/tags/apply', body),
+
+  createFolder: (body) => send('POST', '/api/folders', body),
+  updateFolder: (id, body) => send('PATCH', `/api/folders/${id}`, body),
+  deleteFolder: (id) => send('DELETE', `/api/folders/${id}`),
+
+  createAlbum: (body) => send('POST', '/api/albums', body),
+  updateAlbum: (id, body) => send('PATCH', `/api/albums/${id}`, body),
+  deleteAlbum: (id) => send('DELETE', `/api/albums/${id}`),
+  addToAlbum: (id, assetIds) => send('POST', `/api/albums/${id}/add`, { asset_ids: assetIds }),
+  removeFromAlbum: (id, assetIds) => send('POST', `/api/albums/${id}/remove`, { asset_ids: assetIds }),
+
+  createSmart: (body) => send('POST', '/api/smart', body),
+  updateSmart: (id, body) => send('PATCH', `/api/smart/${id}`, body),
+  deleteSmart: (id) => send('DELETE', `/api/smart/${id}`),
+
+  startImport: (path, recursive) => send('POST', '/api/import', { path, recursive }),
   importStatus: () => request('/api/import'),
 };
 

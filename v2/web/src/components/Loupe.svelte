@@ -2,7 +2,7 @@
   import { api, formatBytes, originalUrl, thumbUrl } from '../lib/api.js';
 
   /** Single-image viewer: fit / zoom around cursor / drag pan / prev-next. */
-  let { ids, index = $bindable(0), onclose } = $props();
+  let { ids, index = $bindable(0), catalogIndex, refreshKey = 0, onclose, onpick, onremove } = $props();
 
   const MIN_ZOOM = 0.05;
   const MAX_ZOOM = 16;
@@ -21,9 +21,11 @@
 
   const id = $derived(ids[index]);
 
+  let shownId = null;
   $effect(() => {
     const current = id;
-    detail = null;
+    refreshKey;
+    if (current !== shownId) { detail = null; shownId = current; } // refresh keeps the old detail visible
     error = '';
     api.asset(current).then((d) => { if (current === id) detail = d; }).catch((e) => { error = e.message; });
     // Warm neighbours so arrow-key browsing feels instant.
@@ -94,6 +96,8 @@
       case 'End': index = ids.length - 1; fitted = true; return true;
       case 'Escape': case 'Enter': onclose?.(); return true;
       case 'i': showInfo = !showInfo; return true;
+      case 't': onpick?.('tags', id); return true;
+      case 'b': onpick?.('albums', id); return true;
       case '0': fit(); return true;
       case '1': zoomAt(stageW / 2, stageH / 2, 1); return true;
       case '+': case '=': case 'ArrowUp': zoomAt(stageW / 2, stageH / 2, scale * 1.25); return true;
@@ -152,7 +156,19 @@
         <dt>來源</dt><dd class="path">{detail.source_path ?? '—'}</dd>
         <dt>SHA-256</dt><dd class="path">{detail.sha256.slice(0, 16)}…</dd>
       </dl>
-      <p class="hint">Tag／Album 於 P1 加入</p>
+      <section class="member" data-testid="loupe-tags">
+        <h4>Tags <button type="button" onclick={() => onpick?.('tags', id)} title="加 tag（T）">＋</button></h4>
+        {#each detail.tags as t (t.id)}
+          {@const tag = catalogIndex.tagById.get(t.id)}
+          <span class="pill"><i class="dot" style:background={tag?.color ?? '#9a9a94'}></i>{catalogIndex.tagPath(t.id)}<button type="button" onclick={() => onremove?.('tags', t.id, id)} aria-label="移除">×</button></span>
+        {:else}<p class="none">無</p>{/each}
+      </section>
+      <section class="member" data-testid="loupe-albums">
+        <h4>相簿 <button type="button" onclick={() => onpick?.('albums', id)} title="加入相簿（B）">＋</button></h4>
+        {#each detail.albums as a (a)}
+          <span class="pill">▣ {catalogIndex.albumById.get(a)?.name ?? `#${a}`}<button type="button" onclick={() => onremove?.('albums', a, id)} aria-label="移出">×</button></span>
+        {:else}<p class="none">無</p>{/each}
+      </section>
     </aside>
   {/if}
 </div>
@@ -202,7 +218,13 @@
   dt { color: #9a9a94; }
   dd { margin: 0; overflow-wrap: anywhere; }
   .path { font: 12px ui-monospace, monospace; }
-  .hint { margin: 12px 0 0; color: #9a9a94; font-size: 12px; }
+  .member { margin-top: 14px; }
+  .member h4 { display: flex; justify-content: space-between; align-items: center; margin: 0 0 6px; font-size: 12px; color: #9a9a94; font-weight: 600; }
+  .member h4 button { padding: 0 8px; background: #2a2a28; border-color: #3a3a37; color: #ecece8; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; margin: 0 4px 4px 0; padding: 1px 2px 1px 8px; border-radius: 999px; background: #2a2a28; font-size: 12px; }
+  .pill button { background: none; border: 0; padding: 0 6px; color: #9a9a94; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .none { margin: 0; color: #6b6b66; font-size: 12px; }
   .error { position: absolute; inset: 0; display: grid; place-content: center; color: #ff7a66; }
   @media (max-width: 640px) {
     .info { left: 12px; right: 12px; width: auto; top: auto; bottom: 12px; max-height: 40%; }
