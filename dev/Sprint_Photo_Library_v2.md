@@ -2,6 +2,8 @@
 
 > 建立日期：2026-10-11。2026-10-11 承諾執行，由 `Plan_Photo_Library_v2` 更名為 Sprint；進度在本文件內追蹤。
 > 與 [[Sprint_Screenshot_Triage_MVP2]] 並行——舊工具在 v2 完成 P2 並 migration 前持續使用，本計畫不修改舊工具任何檔案。
+> 已驗收項目的持久知識萃取至 [[Reference_Photo_Library_v2]]（P0、P1，2026-10-11）。
+> ⚠ 已知風險：`node:sqlite` 在 Windows 曾有 file-backed bulk insert 硬當機紀錄（knowledge/node.md）；本專案 Node 24.20.0 未重現，`npm test` 的 perf 測試持續覆蓋，退路為 better-sqlite3。
 
 ## 進度追蹤
 
