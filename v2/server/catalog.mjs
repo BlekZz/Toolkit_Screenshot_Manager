@@ -11,6 +11,15 @@ function cleanName(name, what) {
   return n;
 }
 
+/** Optional tag description (≤200 chars); empty → null. */
+function cleanDescription(text) {
+  if (text == null) return null;
+  if (typeof text !== 'string') throw bad('description must be a string');
+  const d = text.trim();
+  if (d.length > 200) throw bad('description too long (max 200)');
+  return d || null;
+}
+
 function cleanColor(color) {
   if (color == null || color === '') return null;
   if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw bad('color must be #rrggbb');
@@ -142,16 +151,17 @@ export function createCatalog(db) {
   // ---- tags ----------------------------------------------------------------
 
   function listTags() {
-    return db.prepare(`SELECT t.id, t.parent_id, t.name, t.color, t.is_system,
+    return db.prepare(`SELECT t.id, t.parent_id, t.name, t.color, t.description, t.is_system,
         (SELECT count(*) FROM asset_tags at JOIN assets a ON a.id = at.asset_id
           WHERE at.tag_id = t.id AND a.status = 'active') AS direct_count
       FROM tags t ORDER BY t.is_system DESC, t.name COLLATE NOCASE`).all().map((r) => ({ ...r, is_system: !!r.is_system }));
   }
 
   /** Creates a tag; `name` may be a path "a/b/c" which creates missing ancestors. */
-  function createTag({ name, parent_id = null, color = null }) {
+  function createTag({ name, parent_id = null, color = null, description = null }) {
     const segs = cleanName(name, 'tag').split('/').map((s) => s.trim()).filter(Boolean);
     if (!segs.length) throw bad('tag name is required');
+    const descr = cleanDescription(description);
     if (parent_id != null) requireRow(q.tag, parent_id, 'parent tag');
     return tx(db, () => {
       let parent = parent_id == null ? null : Number(parent_id);
@@ -160,8 +170,8 @@ export function createCatalog(db) {
         const existing = q.tagChild.get(parent ?? 0, seg);
         if (existing) { parent = existing.id; continue; }
         const last = i === segs.length - 1;
-        const { lastInsertRowid } = db.prepare('INSERT INTO tags (parent_id, name, color) VALUES (?, ?, ?)')
-          .run(parent, seg, last ? cleanColor(color) : null);
+        const { lastInsertRowid } = db.prepare('INSERT INTO tags (parent_id, name, color, description) VALUES (?, ?, ?, ?)')
+          .run(parent, seg, last ? cleanColor(color) : null, last ? descr : null);
         parent = Number(lastInsertRowid);
         created = true;
       }
@@ -170,15 +180,16 @@ export function createCatalog(db) {
     });
   }
 
-  function updateTag(id, { name, color, parent_id }) {
+  function updateTag(id, { name, color, parent_id, description }) {
     const tag = requireRow(q.tag, id, 'tag');
     if (tag.is_system) throw bad('system tags cannot be modified', 403);
-    const next = { name: tag.name, color: tag.color, parent_id: tag.parent_id };
+    const next = { name: tag.name, color: tag.color, parent_id: tag.parent_id, description: tag.description };
     if (name !== undefined) {
       next.name = cleanName(name, 'tag');
       if (next.name.includes('/')) throw bad('tag name cannot contain "/" (use parent_id to nest)');
     }
     if (color !== undefined) next.color = cleanColor(color);
+    if (description !== undefined) next.description = cleanDescription(description);
     if (parent_id !== undefined) {
       next.parent_id = parent_id == null ? null : Number(parent_id);
       if (next.parent_id != null) {
@@ -188,8 +199,10 @@ export function createCatalog(db) {
     }
     const clash = q.tagChild.get(next.parent_id ?? 0, next.name);
     if (clash && clash.id !== tag.id) throw bad('a sibling tag with this name already exists', 409);
-    db.prepare('UPDATE tags SET name = ?, color = ?, parent_id = ? WHERE id = ?').run(next.name, next.color, next.parent_id, tag.id);
-    logEvent(db, 'tag.update', { id: tag.id, ...next }, { op: 'tag.update', id: tag.id, name: tag.name, color: tag.color, parent_id: tag.parent_id });
+    db.prepare('UPDATE tags SET name = ?, color = ?, parent_id = ?, description = ? WHERE id = ?')
+      .run(next.name, next.color, next.parent_id, next.description, tag.id);
+    logEvent(db, 'tag.update', { id: tag.id, ...next },
+      { op: 'tag.update', id: tag.id, name: tag.name, color: tag.color, parent_id: tag.parent_id, description: tag.description });
     return q.tag.get(tag.id);
   }
 

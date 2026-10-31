@@ -7,6 +7,16 @@
  *   {op:'has', what:'album'|'tag'|'crop'|'ocr'} | {op:'text', q}
  *   {op:'date', from, to} (inclusive local-date prefixes) | {op:'ext', value}
  *   {op:'status', value} | {op:'rating', cmp, value}
+ *   {op:'suggest', id, conf?:[{cmp, value}]}  pending suggestion for the tag (or a descendant);
+ *       `conf` constraints apply to that same suggestion row
+ *   {op:'confidence', cmp, value}  standalone: any pending suggestion with that confidence
+ *   {op:'age', cmp, days}  file_mtime age relative to "now" at compile time (live in smart albums)
+ *
+ * `confidence:` folding: inside one AND group (explicit or implicit), every
+ * `confidence:` term is folded into each positive `suggest:` sibling, so
+ * `suggest:sensitive confidence:>=0.8` = "a pending sensitive suggestion whose
+ * confidence ≥ 0.8" (same row). Without a `suggest:` sibling (or under OR / NOT
+ * groups that do not contain one), `confidence:` stands alone.
  *
  * The compiler never interpolates user values into SQL — every value is a
  * bound parameter; only fixed fragments chosen from whitelists are concatenated.
@@ -23,6 +33,9 @@ const HAS = {
 const STATUSES = new Set(['active', 'trashed', 'missing']);
 const EXT_ALIASES = { jpg: ['jpg', 'jpeg'], jpeg: ['jpg', 'jpeg'] };
 const CMPS = new Set(['>=', '<=', '>', '<', '=']);
+const AGE_CMPS = new Set(['>=', '<=', '>', '<']);
+const AGE_UNITS = { h: 1 / 24, d: 1, w: 7 };
+const DAY_MS = 86400000;
 const MAX_SMART_DEPTH = 8;
 
 // ---- tokenizer / parser ----------------------------------------------------
@@ -97,7 +110,8 @@ export function parseQuery(input, resolver) {
       if (t.type === 'AND') pos++;
       args.push(parseUnary());
     }
-    return args.length === 1 ? args[0] : { op: 'and', args };
+    const folded = foldConfidence(args);
+    return folded.length === 1 ? folded[0] : { op: 'and', args: folded };
   }
   function parseUnary() {
     const t = tokens[pos++];
@@ -119,6 +133,25 @@ export function parseQuery(input, resolver) {
 
 function anyOf(nodes) {
   return nodes.length === 1 ? nodes[0] : { op: 'or', args: nodes };
+}
+
+/** Folds `confidence:` terms of one AND group into its positive `suggest:` siblings (see header). */
+function foldConfidence(args) {
+  const conf = args.filter((n) => n.op === 'confidence');
+  const isSuggest = (n) => n.op === 'suggest' || (n.op === 'or' && n.args.every((x) => x.op === 'suggest'));
+  if (!conf.length || !args.some(isSuggest)) return args;
+  const constraints = conf.map(({ cmp, value }) => ({ cmp, value }));
+  const attach = (n) => ({ ...n, conf: [...(n.conf ?? []), ...constraints] });
+  return args.filter((n) => n.op !== 'confidence')
+    .map((n) => (n.op === 'suggest' ? attach(n) : isSuggest(n) ? { ...n, args: n.args.map(attach) } : n));
+}
+
+function parseCmpNumber(value, key) {
+  const m = /^(>=|<=|>|<|=)?(\d+(?:\.\d+)?|\.\d+)$/.exec(value);
+  if (!m) throw bad(`${key}: expects e.g. >=0.8`);
+  const v = Number(m[2]);
+  if (!(v >= 0 && v <= 1)) throw bad(`${key}: value must be between 0 and 1`);
+  return { cmp: m[1] ?? '>=', value: v };
 }
 
 function parseTerm({ raw, colon }, resolver) {
@@ -165,6 +198,19 @@ function parseTerm({ raw, colon }, resolver) {
       if (!m) throw bad('rating: expects e.g. >=3');
       return { op: 'rating', cmp: m[1] ?? '=', value: Number(m[2]) };
     }
+    case 'suggest': {
+      const idMatch = /^#(\d+)$/.exec(value);
+      const ids = idMatch ? [Number(idMatch[1])] : resolver.resolveTag(value);
+      if (!ids.length) throw bad(`unknown tag: ${value}`);
+      return anyOf(ids.map((id) => ({ op: 'suggest', id })));
+    }
+    case 'confidence':
+      return { op: 'confidence', ...parseCmpNumber(value, 'confidence') };
+    case 'age': {
+      const m = /^(>=|<=|>|<)(\d+(?:\.\d+)?)([hdw])$/.exec(value);
+      if (!m) throw bad('age: expects e.g. >30d or <7d (units h, d, w)');
+      return { op: 'age', cmp: m[1], days: Number(m[2]) * AGE_UNITS[m[3]] };
+    }
     default:
       throw bad(`unknown key: ${key}`);
   }
@@ -183,11 +229,21 @@ function nextPrefix(d) {
   return String(y + 1);
 }
 
+/** `<cmp> ?` for a confidence constraint; comparator from the whitelist, value bound. */
+function confSql({ cmp, value }, params) {
+  if (!CMPS.has(cmp)) throw bad('invalid confidence comparator');
+  const v = Number(value);
+  if (!(v >= 0 && v <= 1)) throw bad('invalid confidence value');
+  params.push(v);
+  return `${cmp} ?`;
+}
+
 /**
  * Compiles an AST to a WHERE fragment over `assets a`.
  *
  * @param {object} ast
- * @param {{tagSubtree: (id: number) => number[], smartAst: (id: number) => object|null}} ctx
+ * @param {{tagSubtree: (id: number) => number[], smartAst: (id: number) => object|null, now?: number}} ctx
+ *   `now` (epoch ms) overrides the clock for `age:`.
  * @returns {{sql: string, params: any[], mentionsStatus: boolean}}
  */
 export function compileQuery(ast, ctx) {
@@ -258,6 +314,30 @@ export function compileQuery(ast, ctx) {
         if (!CMPS.has(node.cmp)) throw bad('invalid rating comparator');
         params.push(Number(node.value));
         return `COALESCE(a.rating, 0) ${node.cmp} ?`;
+      }
+      case 'suggest': {
+        const id = Number(node.id);
+        if (!Number.isInteger(id)) throw bad('suggest tag id must be an integer');
+        if (node.conf != null && !Array.isArray(node.conf)) throw bad('suggest conf must be an array');
+        const ids = ctx.tagSubtree(id);
+        if (!ids.length) return '0';
+        params.push(...ids);
+        let sql = `EXISTS (SELECT 1 FROM asset_suggestions s WHERE s.asset_id = a.id AND s.status = 'pending'
+          AND s.tag_id IN (${ids.map(() => '?').join(',')})`;
+        for (const c of node.conf ?? []) sql += ` AND s.confidence ${confSql(c, params)}`;
+        return `${sql})`;
+      }
+      case 'confidence':
+        return `EXISTS (SELECT 1 FROM asset_suggestions s WHERE s.asset_id = a.id AND s.status = 'pending'
+          AND s.confidence ${confSql(node, params)})`;
+      case 'age': {
+        if (!AGE_CMPS.has(node.cmp)) throw bad('invalid age comparator');
+        const days = Number(node.days);
+        if (!Number.isFinite(days) || days < 0) throw bad('invalid age');
+        params.push(new Date((ctx.now ?? Date.now()) - days * DAY_MS).toISOString());
+        // Older than N (age > N) ⇔ file time before the cutoff; the comparator flips.
+        const flip = { '>': '<', '>=': '<=', '<': '>', '<=': '>=' }[node.cmp];
+        return `a.file_mtime ${flip} ?`;
       }
       default:
         throw bad(`unknown op: ${node.op}`);
