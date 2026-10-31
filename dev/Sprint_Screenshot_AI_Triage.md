@@ -8,9 +8,9 @@
 | # | 狀態 | 備註 |
 |---|---|---|
 | A0 評估基線 | ✅ 2026-11-01 | 見下方 A0 紀錄 |
-| A1 便宜層 | ⏳ | |
+| A1 便宜層 | ✅ 2026-11-01 | 後端與 CLI 完成並已在真實庫執行；matcher UI 移至 A2。sensitive 規則 recall 39%，未達 S3 前提 |
 | A2 建議 UI | ⏳ | 依賴 v2 P2 Triage |
-| A3 本機 VLM | ⏳ | 模型已下載、初步實測見 §1.2 |
+| A3 本機 VLM | 🔄 | 程式完成、50 張評估完成（見 A3 紀錄）；全庫執行中 |
 | A4 動作綁定 | ⏳ | |
 | A5 雲端開關 | ⏳ | 依賴 A3 sensitive 規則層驗收 |
 
@@ -42,6 +42,44 @@
   - Blake 自建 `context/Gaming`、`sensitive/Adult`：分類體系需可由使用者擴充，VLM prompt 應動態帶入所有有描述的子 tag（A1 自訂 tag 描述欄的需求來源）。
 - 評估程式修正：使用者在 `sensitive` 下建子 tag 後，`sensitive` 曾被誤當容器而不計分；改為 label root 永遠計分、子 tag 視同父 tag（回歸測試＋mutation 2／2 被殺，`npm test` 73／73）。
 - 預選門檻（§6，precision ≥ 0.9）：purpose 6 類、sensitive、context/personal 達標；context/work 未達標，只顯示不預選。此門檻適用於 Claude 標註；VLM 需在 A3 自行重測。
+
+### A1 紀錄（2026-11-01）
+
+- 程式：`v2/server/dhash.mjs`（S0，64-bit dHash，分桶精確比對，保留最早者）、`v2/server/ocr.mjs`（S1 OCR 批次，可續跑）、`v2/server/rules.mjs`（S1 規則引擎，reason 只寫規則名稱）、migration `005_cheap_layer.sql`（`asset_hashes`、`tag_matchers` 與 9 條種子規則）、`v2/cli/cheap.mjs <dup|ocr|rules|all>`；查詢新增 `suggest:`／`confidence:`／`age:`；tag 描述可經 `/api/tags` 讀寫（系統 tag 仍 403）。commit `d29c9c6`，`npm test` 127／127；實作 agent mutation 12／12，主線另抽查 5／5 被殺。
+- 真實照片庫（執行前備份 DB）：dup 1,324 張 → 45 組、58 張近重複建議；OCR 1,324／1,324 成功（low-yield 16）；規則命中 205 張、253 條建議。
+- 以 50 張答案評估規則層：purpose/receipt P 90%／R 90%、purpose/chat P 100%／R 40%、**sensitive P 82%／R 39%**。
+- sensitive 規則層＋VLM 聯集：R 仍為 39%（VLM 沒有補到任何一張）。漏掉的 14 張依用途分：chat 7、visual-ref 4、receipt 2、ephemeral 1。
+  - [fact] 試算「有 chat 建議就視為 sensitive」：P 75%／R 65%。
+  - [inference] 漏掉的主要是私人對話（沒有關鍵字可抓）與成人內容（OCR 抓不到）；要再提高 recall，需要 App 來源訊號（LINE 等）或把 chat 預設視為 sensitive，屬政策決定，列入 §9 待裁。
+- **結論：sensitive 規則層未達 S3 開關前提，A5 雲端開關維持鎖定。**
+
+### A3 紀錄（2026-11-01）
+
+- 程式：`v2/server/vlm.mjs`（動態 taxonomy prompt、JSON schema 驗證、可續跑、連續 3 次傳輸錯誤自動暫停；schema 錯誤不計入）、`v2/server/vlm-compare.mjs`、`v2/cli/vlm.mjs`；`evaluate` 支援 `--only-stage/--only-model`。commit `14bd640`，mutation 8／8 被殺。
+- 真實執行（`qwen3-vl:4b`，prompt_hash `8987699090dc94c4`，GPU 無遊戲負載）：50 張樣本 ok 48、錯誤 2（Ollama 回空內容，下次重跑會補），每張中位數 5.2 秒、p90 10.0 秒。
+- 以 Blake 確認的 50 張為答案（`eval --only-stage vlm --only-model qwen3-vl:4b`）：
+
+| tag | TP | FP | FN | precision | recall |
+|---|---|---|---|---|---|
+| purpose/chat | 9 | 2 | 1 | 82% | 90% |
+| purpose/receipt | 7 | 0 | 3 | 100% | 70% |
+| purpose/text-note | 9 | 4 | 1 | 69% | 90% |
+| purpose/visual-ref | 8 | 8 | 1 | 50% | 89% |
+| purpose/ephemeral | 1 | 0 | 9 | 100% | 10% |
+| purpose/translate | 0 | 0 | 1 | - | 0% |
+| context/personal | 21 | 6 | 8 | 78% | 72% |
+| context/work | 7 | 13 | 0 | 35% | 100% |
+| sensitive | 5 | 0 | 18 | 100% | 22% |
+| custom/*（6 個有命中） | 9 | 17 | 9 | 35% | 50% |
+
+- 解讀：
+  - [fact] VLM 達預選門檻（P ≥ 0.9）的只有 purpose/receipt；其餘一律只顯示、不預選。
+  - [fact] ephemeral 幾乎都被判成 visual-ref（與 Claude 對照：`ephemeral→visual-ref` 6 張）——「這張還要不要」本來就不是看圖能判斷的，符合 §2.3 把保留價值交給回顧佇列的設計。
+  - [fact] sensitive recall 22%，再次確認 VLM 不能當 sensitive 來源；sensitive 由 A1 規則層負責（見 A1 紀錄）。
+  - [fact] context/work 過度判定（FP 13），custom topics 亂貼（P 35%）→ 這兩類 VLM 建議預設不顯示或排在最後，待 A2 UI 決定。
+  - [fact] 與 Claude 初標對照（`vlm compare`，兩者都跑過的 66 張）：purpose 一致 48／66、context 一致 43／66；sensitive 只有 Claude 判定的 26 張、只有 VLM 判定的 0 張。
+  - [inference] 答案集是 Claude 預套 tag 後 Blake 確認的結果，對 VLM 不構成錨定，但答案本身偏向 Claude 的切法。
+- 全庫背景執行中（約 1,270 張）。
 
 ## 最終驗收 checklist
 
@@ -213,6 +251,11 @@ asset_suggestions(
   - `custom/旅遊`：景點、行程、交通
 
   未納入「交友」「命理」：涉及個人隱私、或數量少，由 Blake 需要時自行建立。
+- **Q8**（A1 實測後新增，待 Blake 裁定）：sensitive 規則層 recall 只有 39%，主要漏掉私人對話與成人內容。S3 外送開關前要補哪種訊號？
+  - (a) 只要有 `purpose/chat` 建議就視為 sensitive：50 張試算 R 65%、P 75%，實作最簡單，但所有聊天截圖都無法外送。
+  - (b) App 來源訊號（LINE、銀行 App 的介面特徵或 EXIF／檔名）：較精準，但需另外實作與驗證。
+  - (c) 不補，S3 永久只對已人工確認「非 sensitive」的圖開放。
+  - 建議：(c) 為底線，並加上 (a)——外送本來就是選用功能，寧可少送。
 
 ## 參考
 
