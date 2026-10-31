@@ -54,7 +54,7 @@
 | D2 | Album / Tag 語意 | **並存分工**：Album＝手動策展（多對多、可排序、可巢狀資料夾）；Tag＝屬性（可分層） |
 | D3 | 內容與規模 | **以截圖為主，< 5 萬張**（PNG/JPG/WebP/BMP；不做 HEIC、影片、GPS） |
 | D4 | 文字整合 | **Windows OCR ＋ LLM（Claude API）整合／翻譯** |
-| D5 | LLM 隱私 | **兩者都做**：只在每個 bundle 手動觸發才外送（永不自動批次）；帶 `sensitive` 系統 tag 的圖一律禁止外送 |
+| D5 | LLM 隱私 | **兩者都做**：只在每個 bundle 手動觸發才外送（永不自動批次）；帶 `sensitive` 系統 tag 的圖一律禁止外送。**2026-11-01 修訂**：AI 分流建議另立 D5'（本機優先、Claude 外送為預設關閉開關），見 [[Plan_Screenshot_AI_Triage]] §4；bundle LLM 規則不變 |
 | D6 | Inbox 概念 | **取消 inbox**：匯入即進公共 library，任何時候都可補 tag / album；Triage 改為「對任一 filter 結果跑的鍵盤模式」 |
 | D7 | 舊工具 | **繼續使用**，v2 完成 P2 後一次性 migration 切換 |
 
