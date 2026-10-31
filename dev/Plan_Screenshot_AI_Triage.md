@@ -31,6 +31,19 @@
 - junk 預測的 precision 79%（61／77）；高信心（≥0.7）82%（9／11）。仍未達 §6 的 0.9 預選門檻。
 - [inference] keep 中 14 張被判 junk，部分可能因 keep 是裁剪後的局部圖、缺上下文；需要人工抽查確認。
 
+### 1.2 本機 VLM 實測（2026-11-01，GPU 無遊戲負載，同 30 張 gold，對照 Claude 盲標）
+
+| 模型 | 位置 | 每張中位數／P90 | purpose 一致 | context 一致 | sensitive 抓到（Claude 標 8 張） |
+|---|---|---|---|---|---|
+| qwen3-vl:8b | 14% CPU／86% GPU | 16.4s／29.9s | 18／30 | 27／30 | 2／8 |
+| qwen3-vl:4b | 100% GPU（3.6GB） | 2.3s／14.7s | 18／30 | 25／30 | 0／8 |
+
+- 兩者 schema 30／30 合格；不一致主要是 Claude 的 junk 被判成 visual-ref（8b 8 次、4b 7 次）——本機 VLM 幾乎不用「暫時性」類別。
+- **4b 為預設**：一致率與 8b 相同、快 7 倍，千張約 40–60 分鐘可夜間跑完。8b 保留為「重判低信心」選項。
+- **VLM 不能當 sensitive 判斷來源**（recall 0–25%）。sensitive 改為規則優先：OCR 文字比對（帳號／卡號／驗證碼／密碼等關鍵字與數字樣式）＋ App 來源（銀行、LINE 私訊）＋ VLM 只作補充。外送開關（S3）在此規則層通過 A3 recall 驗收前不得啟用。
+- 8b 曾把卡號末四碼寫進 reason（見 §7.1 A3 過濾規則）。
+- 樣本只有 30 張，結論為初步方向；A3 以完整 gold set 重測。
+
 結論：**不把「刪除」當分類目標去加大判斷邏輯。** 時間造成的價值變化是誤差的本質來源，應由回顧流程處理（§2.3），不是由更複雜的模型處理。
 
 ## 2. 分類模型：三個正交維度＋一組時效訊號
@@ -67,7 +80,7 @@
 匯入 asset
   → S0 重複／近重複：sharp 算 dHash → 訊號 dup_of=#id
   → S1 OCR（沿用 Windows OCR）＋ 規則引擎（Paperless-ngx 式 matcher：any/all/regex/檔名/尺寸）
-  → S2 本機 VLM（Ollama qwen3-vl:8b，圖縮到長邊 ≤1280）→ 固定 JSON：
+  → S2 本機 VLM（Ollama qwen3-vl:4b 預設、8b 重判低信心，圖縮到長邊 ≤1280）→ 固定 JSON：
         {purpose, context, sensitive, confidence, reason, custom_tags[]}
   → S3 [開關，預設關] Claude API：只送 S2 信心低、且非 sensitive 者（§4 D5'）
 → asset_suggestions（不是 asset_tags）→ Triage／Grid 確認後才寫 asset_tags(source='ai')
@@ -129,7 +142,7 @@ asset_suggestions(
 - A0：匯入後 suggestions 筆數＝964；評估腳本對已知答案集輸出正確 precision／recall。
 - A1：重複圖 fixture（同圖、縮放、重新壓縮）全數命中；規則改動後重跑可重現。
 - A2：接受 → `asset_tags.source='ai'` 且可 undo；拒絕 → `rejected` 且 tag 不變；回顧 Smart Album 排序符合年齡×類型。
-- A3：VLM 輸出不合 schema 時記錄錯誤、不產生建議；拔網路仍可完整跑 S0–S2；**在 GPU 無其他負載下**量測每張耗時。
+- A3：`reason` 欄在落庫前經程式過濾（連續 4 位以上數字、email、電話樣式一律遮蔽）——2026-11-01 實測 qwen3-vl:8b 違反 prompt 把卡號末四碼寫進 reason，不能只靠 prompt；VLM 輸出不合 schema 時記錄錯誤、不產生建議；拔網路仍可完整跑 S0–S2；**在 GPU 無其他負載下**量測每張耗時。
 - A5：開關關閉時 S3 端點回 403；帶 `sensitive` 的 asset 直打 API 回 403；API key 不出現在 DB／log。
 
 ## 8. 為何不是純 skill（記錄取捨與實測）
@@ -139,9 +152,18 @@ asset_suggestions(
 
 ## 9. 待裁
 
-- Q5：本機 VLM 測速需要 GPU 空閒時再跑（2026-11-01 嘗試時 Dota 2 與 Wallpaper Engine 占滿 GPU，模型 14% 落到 CPU，單張超過 10 分鐘仍未完成，測試已中止）。
-- Q6：回顧佇列的預設門檻（30 天？依類型不同？）。
-- Q7：自訂 tag 初始清單要從 keywords 候選中挑哪些。
+- ~~Q5~~：GPU 空閒時已測（§1.2）。注意：遊戲占用 GPU 時 8b 單張超過 10 分鐘，S2 job 佇列需在偵測到 GPU 高負載時暫停。
+- ~~Q6~~（2026-11-01 裁定）：回顧門檻預設 30 天；`purpose/receipt` 14 天。設定頁可依類型調整。
+- ~~Q7~~（2026-11-01 由 claude 代決，Blake 授權）：初始自訂 tag 7 個，皆附描述供 VLM 使用：
+  - `custom/AI工具`：AI 產品、提示詞、自動化、開源工具
+  - `custom/資料分析`：SQL、Python、KPI、資料庫、報表
+  - `custom/職涯`：求職、職場、管理
+  - `custom/穿搭`：服裝、外套、搭配
+  - `custom/配色設計`：配色、版面、設計參考
+  - `custom/攝影`：構圖、擺姿、人像
+  - `custom/旅遊`：景點、行程、交通
+
+  未納入「交友」「命理」：涉及個人隱私、或數量少，由 Blake 需要時自行建立。
 
 ## 參考
 
