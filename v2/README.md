@@ -58,6 +58,21 @@ npm start            # http://127.0.0.1:3040（僅綁 127.0.0.1）
 - 篩選狀態會寫進網址，可以加書籤。
 - 系統 tag：`sensitive`（P3 起禁止外送 LLM）、`ocr/low-yield`、`triage/later`，不可刪除或改名。
 
+## AI 分類建議（實驗中）
+
+規劃：[`dev/Sprint_Screenshot_AI_Triage.md`](../dev/Sprint_Screenshot_AI_Triage.md)。AI 只提「建議」，接受後才變成 tag；任何 AI 建議都不會把照片丟進垃圾桶。
+
+- 內建 tag：`purpose/*`（文字筆記、對話、外語、視覺參考、收據、暫時性）、`context/work`、`context/personal`（系統 tag），以及可自由改刪的 `custom/*`（只用於篩選）。
+- CLI：
+
+  ```powershell
+  node cli/suggest.mjs import <labels.jsonl> --model <name> [--dry-run]   # 匯入標註為待確認建議（重跑不重複）
+  node cli/suggest.mjs sample --n 50                                       # 依類別分層抽樣，放進「AI 確認樣本」相簿並先套上建議 tag
+  node cli/suggest.mjs eval [--finalize]                                    # 依你修正後的 tag 計算各 tag precision／recall
+  ```
+
+- 確認樣本的方式：打開「AI 確認樣本」相簿，對的 tag 留著，錯的用 `Shift+T` 移除，缺的用 `T` 補上，最後跑 `eval --finalize`。
+
 ## 快捷鍵
 
 | 畫面 | 按鍵 | 動作 |

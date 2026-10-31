@@ -7,12 +7,20 @@
 
 | # | 狀態 | 備註 |
 |---|---|---|
-| A0 評估基線 | 🔄 進行中 | 2026-11-01 開工 |
+| A0 評估基線 | 🔄 程式完成，等 Blake 確認 50 張樣本 | 見下方 A0 紀錄 |
 | A1 便宜層 | ⏳ | |
 | A2 建議 UI | ⏳ | 依賴 v2 P2 Triage |
 | A3 本機 VLM | ⏳ | 模型已下載、初步實測見 §1.2 |
 | A4 動作綁定 | ⏳ | |
 | A5 雲端開關 | ⏳ | 依賴 A3 sensitive 規則層驗收 |
+
+### A0 紀錄（2026-11-01）
+
+- 程式：`v2/server/migrations/003_suggestions.sql`（`asset_suggestions`、`tags.description`、purpose／context 系統 tag、7 個 custom tag）、`v2/server/suggestions.mjs`（`importLabels`／`sampleForReview`／`evaluate`／`sanitizeReason`）、`v2/cli/suggest.mjs`。
+- 測試：`npm test` 72／72（新增 `test/suggestions.test.mjs` 10 項，其中 1 項走真實 CLI）。mutation 7／7 被殺：dry-run 不回滾、Input/ 消歧、數字遮蔽、UNIQUE 冪等、重複抽樣、FN 計算、junk→ephemeral 對應。
+- 真實資料：`Input/` 964 張匯入 `D:\PhotoLibrary`（imported 964、dup 0、err 0）；Claude 初標 964／964 匹配，寫入 2,134 條 pending 建議；抽樣 50 張進相簿「AI 確認樣本」（chat 10、ephemeral 10、receipt 10、text-note 10、visual-ref 9、translate 1），只有這 50 張套上 `source='ai'` tag（120 個）。
+- HTTP 實測（真實 server，port 3041）：`album:"AI 確認樣本"`＝50；`tag:purpose`＝50；全庫 964。
+- **待 Blake**：在 v2 開「AI 確認樣本」相簿，逐張保留正確 tag、刪除錯誤 tag（Shift+T）、補上缺的 tag（T）；完成後執行 `node cli/suggest.mjs eval --library D:/PhotoLibrary --finalize` 產出 precision／recall。
 
 ## 最終驗收 checklist
 
@@ -159,7 +167,7 @@ asset_suggestions(
 
 ### 7.1 各里程碑 QA（草案）
 
-- A0：匯入後 suggestions 筆數＝964；評估腳本對已知答案集輸出正確 precision／recall。
+- A0：初標 964 張全數匹配 asset（unmatched／ambiguous／invalid 皆 0）✅；重匯冪等 ✅；評估腳本對已知答案集輸出正確 TP／FP／FN ✅（`test/suggestions.test.mjs`）；Blake 確認 50 張後 eval 產出數字 ⏳。
 - A1：重複圖 fixture（同圖、縮放、重新壓縮）全數命中；規則改動後重跑可重現。
 - A2：接受 → `asset_tags.source='ai'` 且可 undo；拒絕 → `rejected` 且 tag 不變；回顧 Smart Album 排序符合年齡×類型。
 - A3：`reason` 欄在落庫前經程式過濾（連續 4 位以上數字、email、電話樣式一律遮蔽）——2026-11-01 實測 qwen3-vl:8b 違反 prompt 把卡號末四碼寫進 reason，不能只靠 prompt；VLM 輸出不合 schema 時記錄錯誤、不產生建議；拔網路仍可完整跑 S0–S2；**在 GPU 無其他負載下**量測每張耗時。
