@@ -1,7 +1,27 @@
-# Plan：截圖 AI 分流建議（AI Triage Suggestions）
+# Sprint：截圖 AI 分流建議（AI Triage Suggestions）
 
-> 狀態：Plan（規劃中，未承諾執行）。建立 2026-11-01，同日依 Blake 裁定與 Claude 初標實測修訂（claude）。
+> 狀態：**執行中**（2026-11-01 Blake 決定執行，由 `Plan_Screenshot_AI_Triage` 更名）。建立 2026-11-01（claude）。
 > 上游：[[Sprint_Photo_Library_v2]]（本計畫＝其 P4「AI tag 建議」的展開並提前規劃）、[[Reference_Photo_Library_v2]]。
+
+## 進度追蹤
+
+| # | 狀態 | 備註 |
+|---|---|---|
+| A0 評估基線 | 🔄 進行中 | 2026-11-01 開工 |
+| A1 便宜層 | ⏳ | |
+| A2 建議 UI | ⏳ | 依賴 v2 P2 Triage |
+| A3 本機 VLM | ⏳ | 模型已下載、初步實測見 §1.2 |
+| A4 動作綁定 | ⏳ | |
+| A5 雲端開關 | ⏳ | 依賴 A3 sensitive 規則層驗收 |
+
+## 最終驗收 checklist
+
+- [ ] `Input/` 全量經 S0–S2 產生建議，Blake 於 Triage 以「接受／覆寫」完成至少一輪 100 張，記錄接受率。
+- [ ] 各 purpose precision 以完整 gold set 量測並記錄；未達 0.9 者確認不預選。
+- [ ] sensitive 規則層 recall 以 gold set 量測並記錄；S3 開關在未達標時無法啟用（server 端驗證）。
+- [ ] 回顧 Smart Album 依門檻（30 天／receipt 14 天）正確列出，Blake 完成一輪回顧。
+- [ ] 任何 AI 建議都不會直接產生 trash（路由表與動作綁定審查）。
+- [ ] 驗收由不同於實作者的 fresh-context agent 透過真實入口（HTTP／UI／CLI）執行。
 
 ## 0. 一句話
 
