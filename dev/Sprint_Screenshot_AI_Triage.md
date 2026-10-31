@@ -7,7 +7,7 @@
 
 | # | 狀態 | 備註 |
 |---|---|---|
-| A0 評估基線 | 🔄 程式完成，等 Blake 確認 50 張樣本 | 見下方 A0 紀錄 |
+| A0 評估基線 | ✅ 2026-11-01 | 見下方 A0 紀錄 |
 | A1 便宜層 | ⏳ | |
 | A2 建議 UI | ⏳ | 依賴 v2 P2 Triage |
 | A3 本機 VLM | ⏳ | 模型已下載、初步實測見 §1.2 |
@@ -20,7 +20,28 @@
 - 測試：`npm test` 72／72（新增 `test/suggestions.test.mjs` 10 項，其中 1 項走真實 CLI）。mutation 7／7 被殺：dry-run 不回滾、Input/ 消歧、數字遮蔽、UNIQUE 冪等、重複抽樣、FN 計算、junk→ephemeral 對應。
 - 真實資料：`Input/` 964 張匯入 `D:\PhotoLibrary`（imported 964、dup 0、err 0）；Claude 初標 964／964 匹配，寫入 2,134 條 pending 建議；抽樣 50 張進相簿「AI 確認樣本」（chat 10、ephemeral 10、receipt 10、text-note 10、visual-ref 9、translate 1），只有這 50 張套上 `source='ai'` tag（120 個）。
 - HTTP 實測（真實 server，port 3041）：`album:"AI 確認樣本"`＝50；`tag:purpose`＝50；全庫 964。
-- **待 Blake**：在 v2 開「AI 確認樣本」相簿，逐張保留正確 tag、刪除錯誤 tag（Shift+T）、補上缺的 tag（T）；完成後執行 `node cli/suggest.mjs eval --library D:/PhotoLibrary --finalize` 產出 precision／recall。
+- Blake 確認 50 張（2026-11-01），`eval --finalize`：accepted 118、rejected 2。
+
+| tag | TP | FP | FN | precision | recall |
+|---|---|---|---|---|---|
+| purpose/*（6 類合計） | 50 | 0 | 0 | 100% | 100%* |
+| sensitive | 21 | 0 | 2 | 100% | 91% |
+| context/personal | 29 | 0 | 0 | 100% | 100% |
+| context/work | 6 | 2 | 1 | 75% | 86% |
+| custom/AI工具、攝影、旅遊 | 7 | 0 | 0 | 100% | 100% |
+| custom/資料分析 | 3 | 0 | 1 | 100% | 75% |
+| custom/職涯 | 2 | 0 | 5 | 100% | 29% |
+| context/Gaming（Blake 新建） | 0 | 0 | 1 | - | - |
+| sensitive/Adult（Blake 新建） | 0 | 0 | 2 | - | - |
+
+- 解讀與限制：
+  - \*purpose recall 結構上必為 100%：樣本依「建議的 purpose」分層抽出，每張必有一個 purpose 建議；只有在使用者加上第二個 purpose 時才會下降。
+  - [inference] tag 已預先套上，確認方式是「留著＝接受」，有錨定效應，precision 可能偏高；A3 VLM 對照時改用「不預套、盲選」的抽樣以校正。
+  - Claude 的 sensitive 判斷可用（P 100%／R 91%），與本機 VLM（§1.2，R 0–25%）落差極大 → S3 開關前的 sensitive 規則層仍是硬前提。
+  - custom tag 用 keyword 精確比對漏抓多（職涯 R 29%）→ A3 改由 VLM 依 tag 描述判斷，不再用 keyword 對應。
+  - Blake 自建 `context/Gaming`、`sensitive/Adult`：分類體系需可由使用者擴充，VLM prompt 應動態帶入所有有描述的子 tag（A1 自訂 tag 描述欄的需求來源）。
+- 評估程式修正：使用者在 `sensitive` 下建子 tag 後，`sensitive` 曾被誤當容器而不計分；改為 label root 永遠計分、子 tag 視同父 tag（回歸測試＋mutation 2／2 被殺，`npm test` 73／73）。
+- 預選門檻（§6，precision ≥ 0.9）：purpose 6 類、sensitive、context/personal 達標；context/work 未達標，只顯示不預選。此門檻適用於 Claude 標註；VLM 需在 A3 自行重測。
 
 ## 最終驗收 checklist
 
@@ -167,7 +188,7 @@ asset_suggestions(
 
 ### 7.1 各里程碑 QA（草案）
 
-- A0：初標 964 張全數匹配 asset（unmatched／ambiguous／invalid 皆 0）✅；重匯冪等 ✅；評估腳本對已知答案集輸出正確 TP／FP／FN ✅（`test/suggestions.test.mjs`）；Blake 確認 50 張後 eval 產出數字 ⏳。
+- A0：初標 964 張全數匹配 asset（unmatched／ambiguous／invalid 皆 0）✅；重匯冪等 ✅；評估腳本對已知答案集輸出正確 TP／FP／FN ✅（`test/suggestions.test.mjs`）；Blake 確認 50 張後 eval 產出數字 ✅。
 - A1：重複圖 fixture（同圖、縮放、重新壓縮）全數命中；規則改動後重跑可重現。
 - A2：接受 → `asset_tags.source='ai'` 且可 undo；拒絕 → `rejected` 且 tag 不變；回顧 Smart Album 排序符合年齡×類型。
 - A3：`reason` 欄在落庫前經程式過濾（連續 4 位以上數字、email、電話樣式一律遮蔽）——2026-11-01 實測 qwen3-vl:8b 違反 prompt 把卡號末四碼寫進 reason，不能只靠 prompt；VLM 輸出不合 schema 時記錄錯誤、不產生建議；拔網路仍可完整跑 S0–S2；**在 GPU 無其他負載下**量測每張耗時。

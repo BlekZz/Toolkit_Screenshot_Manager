@@ -11,8 +11,10 @@ export const PURPOSE_TAG = {
   ephemeral: 'purpose/ephemeral',
 };
 export const CONTEXT_TAG = { work: 'context/work', personal: 'context/personal' };
-/** Tag groups that evaluation looks at (top-level tag names). */
-export const EVAL_ROOTS = ['purpose', 'context', 'sensitive', 'custom'];
+/** Top-level tags that are pure folders: only their descendants are scored. */
+export const CONTAINER_ROOTS = ['purpose', 'context', 'custom'];
+/** Top-level tags that are labels themselves (scored even if the user adds child tags under them). */
+export const LABEL_ROOTS = ['sensitive'];
 
 /**
  * Masks things that look like personal data in model-written text: runs of
@@ -211,8 +213,10 @@ export function sampleForReview(db, { n = 50, seed = 1, albumName = 'AI 確認�
 
 /**
  * Scores suggestions against the user's final tags for every asset in an album.
- * For tags under EVAL_ROOTS: suggested & present = TP, suggested & absent = FP,
- * present (any source) & not suggested = FN. With `finalize`, suggestions get
+ * Scored tags: descendants of CONTAINER_ROOTS, plus LABEL_ROOTS and their descendants.
+ * A tag counts as present when it or any descendant is on the asset (so a
+ * user-made `sensitive/Adult` confirms `sensitive`). Suggested & present = TP,
+ * suggested & absent = FP, present (any source) & not suggested = FN. With `finalize`, suggestions get
  * status accepted/rejected so later runs can tell reviewed from pending.
  *
  * @param {import('node:sqlite').DatabaseSync} db
@@ -224,18 +228,23 @@ export function evaluate(db, { albumName = 'AI 確認樣本', finalize = false }
   if (!album) throw new Error(`album not found: ${albumName}`);
   const assets = db.prepare('SELECT asset_id FROM album_items WHERE album_id = ?').all(album.id).map((r) => r.asset_id);
 
-  const roots = EVAL_ROOTS.map((r) => tagIdByPath(db, r)).filter(Boolean);
+  const containers = new Set(CONTAINER_ROOTS.map((r) => tagIdByPath(db, r)).filter(Boolean));
+  const labelRoots = new Set(LABEL_ROOTS.map((r) => tagIdByPath(db, r)).filter(Boolean));
   const inScope = new Map(); // tag id → path label
-  const rootRows = db.prepare('SELECT id, name, parent_id FROM tags').all();
-  const byId = new Map(rootRows.map((t) => [t.id, t]));
+  const rows = db.prepare('SELECT id, name, parent_id FROM tags').all();
+  const byId = new Map(rows.map((t) => [t.id, t]));
   const label = (id) => { const p = []; for (let t = byId.get(id); t; t = byId.get(t.parent_id)) p.unshift(t.name); return p.join('/'); };
   const rootOf = (id) => { let t = byId.get(id); while (t?.parent_id) t = byId.get(t.parent_id); return t?.id; };
-  for (const t of rootRows) {
+  for (const t of rows) {
     const r = rootOf(t.id);
-    // Roots with children are containers (purpose/context/custom); a childless root (sensitive) is itself the label.
-    const isContainer = rootRows.some((c) => c.parent_id === t.id);
-    if (roots.includes(r) && !isContainer) inScope.set(t.id, label(t.id));
+    if ((containers.has(r) && t.id !== r) || labelRoots.has(r)) inScope.set(t.id, label(t.id));
   }
+  /** Asset tag ids expanded with their in-scope ancestors. */
+  const withAncestors = (ids) => {
+    const out = new Set();
+    for (const id of ids) for (let t = byId.get(id); t; t = byId.get(t.parent_id)) if (inScope.has(t.id)) out.add(t.id);
+    return out;
+  };
 
   const perTag = {};
   const bump = (id, k) => { const l = inScope.get(id); (perTag[l] ??= { tp: 0, fp: 0, fn: 0 })[k]++; };
@@ -246,7 +255,7 @@ export function evaluate(db, { albumName = 'AI 確認樣本', finalize = false }
 
   const run = () => {
     for (const a of assets) {
-      const have = new Set(tags.all(a).map((r) => r.tag_id).filter((id) => inScope.has(id)));
+      const have = withAncestors(tags.all(a).map((r) => r.tag_id));
       const suggested = new Set();
       for (const s of sugg.all(a)) {
         if (!inScope.has(s.tag_id) || suggested.has(s.tag_id)) continue;

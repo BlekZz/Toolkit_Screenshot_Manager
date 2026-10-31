@@ -161,6 +161,29 @@ describe('sampleForReview + evaluate', () => {
   });
 });
 
+describe('evaluate with user-made child tags', () => {
+  test('sensitive stays scored after a child (sensitive/Adult) is created; child confirms parent', () => {
+    const ids = seedAssets(['P.PNG', 'Q.PNG', 'R.PNG']);
+    importLabels(lib.db, [
+      label('P.PNG', 'chat', { sensitive: true }), // user swaps sensitive → sensitive/Adult
+      label('Q.PNG', 'chat', { sensitive: true }), // user removes sensitive entirely
+      label('R.PNG', 'chat'), // user adds sensitive/Adult although not suggested
+    ]);
+    sampleForReview(lib.db, { n: 3 });
+    const sens = tagIdByPath(lib.db, 'sensitive');
+    const adult = Number(lib.db.prepare("INSERT INTO tags (parent_id, name, is_system) VALUES (?, 'Adult', 0)").run(sens).lastInsertRowid);
+    const del = lib.db.prepare('DELETE FROM asset_tags WHERE asset_id = ? AND tag_id = ?');
+    const add = lib.db.prepare("INSERT INTO asset_tags (asset_id, tag_id, source, added_at) VALUES (?, ?, 'manual', 'x')");
+    del.run(ids['P.PNG'], sens); add.run(ids['P.PNG'], adult);
+    del.run(ids['Q.PNG'], sens);
+    add.run(ids['R.PNG'], adult);
+
+    const r = evaluate(lib.db);
+    assert.deepEqual(r.perTag.sensitive, { tp: 1, fp: 1, fn: 1, precision: 0.5, recall: 0.5 });
+    assert.equal(r.perTag['sensitive/Adult'].fn, 2);
+  });
+});
+
 describe('CLI (real entry point)', () => {
   test('import → sample → eval round trip on a library directory', () => {
     seedAssets(['A.PNG', 'B.PNG']);
