@@ -1,7 +1,7 @@
 // AI suggestion maintenance (Sprint_Screenshot_AI_Triage A0).
 //   node cli/suggest.mjs import <labels.jsonl> [--stage import] [--model <name>] [--prompt-hash <h>] [--dry-run]
 //   node cli/suggest.mjs sample [--n 50] [--seed 1] [--album "AI 確認樣本"]
-//   node cli/suggest.mjs eval [--album "AI 確認樣本"] [--finalize]
+//   node cli/suggest.mjs eval [--album "AI 確認樣本"] [--finalize | --only-stage vlm --only-model qwen3-vl:4b]
 // Common: [--library <dir>]
 import fs from 'node:fs';
 import { parseArgs } from 'node:util';
@@ -20,6 +20,8 @@ const { values, positionals } = parseArgs({
     seed: { type: 'string', default: '1' },
     album: { type: 'string', default: 'AI 確認樣本' },
     finalize: { type: 'boolean', default: false },
+    'only-stage': { type: 'string' },
+    'only-model': { type: 'string' },
   },
 });
 
@@ -40,7 +42,9 @@ try {
   } else if (cmd === 'sample') {
     console.log(JSON.stringify(sampleForReview(lib.db, { n: Number(values.n), seed: Number(values.seed), albumName: values.album }), null, 1));
   } else {
-    const r = evaluate(lib.db, { albumName: values.album, finalize: values.finalize });
+    const r = evaluate(lib.db, {
+      albumName: values.album, finalize: values.finalize, stage: values['only-stage'] ?? null, model: values['only-model'] ?? null,
+    });
     const pct = (x) => (x == null ? '   -' : `${(x * 100).toFixed(0).padStart(3)}%`);
     console.log(`assets=${r.assets}  finalize=${values.finalize}`);
     console.log('tag'.padEnd(24), '  tp  fp  fn  precision recall');

@@ -259,10 +259,14 @@ export function sampleForReview(db, { n = 50, seed = 1, albumName = 'AI 確認�
  * status accepted/rejected so later runs can tell reviewed from pending.
  *
  * @param {import('node:sqlite').DatabaseSync} db
- * @param {{albumName?: string, finalize?: boolean}} [opts]
+ * `stage`／`model` restrict scoring to one suggestion source (e.g. the VLM) and
+ * cannot be combined with `finalize` (statuses are shared across sources).
+ *
+ * @param {{albumName?: string, finalize?: boolean, stage?: string, model?: string}} [opts]
  * @returns {{assets: number, perTag: Record<string, {tp: number, fp: number, fn: number, precision: number|null, recall: number|null}>}}
  */
-export function evaluate(db, { albumName = 'AI 確認樣本', finalize = false } = {}) {
+export function evaluate(db, { albumName = 'AI 確認樣本', finalize = false, stage = null, model = null } = {}) {
+  if (finalize && (stage || model)) throw new Error('finalize cannot be combined with a stage/model filter');
   const album = db.prepare('SELECT id FROM albums WHERE name = ?').get(albumName);
   if (!album) throw new Error(`album not found: ${albumName}`);
   const assets = db.prepare('SELECT asset_id FROM album_items WHERE album_id = ?').all(album.id).map((r) => r.asset_id);
@@ -287,7 +291,10 @@ export function evaluate(db, { albumName = 'AI 確認樣本', finalize = false }
 
   const perTag = {};
   const bump = (id, k) => { const l = inScope.get(id); (perTag[l] ??= { tp: 0, fp: 0, fn: 0 })[k]++; };
-  const sugg = db.prepare("SELECT id, tag_id FROM asset_suggestions WHERE asset_id = ? AND status IN ('pending', 'accepted', 'rejected')");
+  const sugg = db.prepare(`SELECT id, tag_id FROM asset_suggestions WHERE asset_id = ?
+    AND (? IS NULL OR stage = ?) AND (? IS NULL OR model = ?)
+    AND (? IS NOT NULL OR ? IS NOT NULL OR status IN ('pending', 'accepted', 'rejected'))`);
+  const suggFor = (a) => sugg.all(a, stage, stage, model, model, stage, model);
   const tags = db.prepare('SELECT tag_id FROM asset_tags WHERE asset_id = ?');
   const setStatus = db.prepare('UPDATE asset_suggestions SET status = ?, decided_at = ? WHERE id = ?');
   const ts = now();
@@ -296,13 +303,13 @@ export function evaluate(db, { albumName = 'AI 確認樣本', finalize = false }
     for (const a of assets) {
       const have = withAncestors(tags.all(a).map((r) => r.tag_id));
       const suggested = new Set();
-      for (const s of sugg.all(a)) {
+      for (const s of suggFor(a)) {
         if (!inScope.has(s.tag_id) || suggested.has(s.tag_id)) continue;
         suggested.add(s.tag_id);
         bump(s.tag_id, have.has(s.tag_id) ? 'tp' : 'fp');
       }
       for (const id of have) if (!suggested.has(id)) bump(id, 'fn');
-      if (finalize) for (const s of sugg.all(a)) if (inScope.has(s.tag_id)) setStatus.run(have.has(s.tag_id) ? 'accepted' : 'rejected', ts, s.id);
+      if (finalize) for (const s of suggFor(a)) if (inScope.has(s.tag_id)) setStatus.run(have.has(s.tag_id) ? 'accepted' : 'rejected', ts, s.id);
     }
   };
   if (finalize) tx(db, () => { run(); logEvent(db, 'suggestions.evaluate', { album_id: album.id, assets: assets.length }); });
