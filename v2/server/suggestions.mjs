@@ -100,10 +100,8 @@ export function importLabels(db, rows, { stage = 'import', model = '', promptHas
   const missingTags = Object.entries(ids).filter(([, v]) => !v).map(([k]) => k);
   if (missingTags.length) throw new Error(`missing tags (migration 003 not applied?): ${missingTags.join(', ')}`);
 
-  const ins = db.prepare(`INSERT OR IGNORE INTO asset_suggestions
-    (asset_id, tag_id, stage, confidence, reason, model, prompt_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  const write = suggestionWriter(db, { stage, model, promptHash });
   const out = { rows: rows.length, matched: 0, unmatched: [], ambiguous: [], invalid: [], inserted: 0, skipped: 0 };
-  const ts = now();
 
   const DRY = Symbol('dry-run');
   try {
@@ -129,14 +127,55 @@ export function importLabels(db, rows, { stage = 'import', model = '', promptHas
       if (CONTEXT_TAG[r.context]) tagIds.push(ids[CONTEXT_TAG[r.context]]);
       if (r.sensitive === true) tagIds.push(ids.sensitive);
       tagIds.push(...customFor(r.keywords));
-      const reason = sanitizeReason(r.reason);
-      for (const tagId of new Set(tagIds)) {
-        const res = ins.run(id, tagId, stage, conf, reason, model, promptHash, ts);
-        if (res.changes) out.inserted++; else out.skipped++;
-      }
+      const res = write(id, tagIds.map((tagId) => ({ tagId, confidence: conf, reason: r.reason })));
+      out.inserted += res.inserted;
+      out.skipped += res.skipped;
     }
     logEvent(db, 'suggestions.import', { stage, model, rows: out.rows, matched: out.matched, inserted: out.inserted });
   }
+}
+
+/**
+ * Shared low-level writer used by every suggestion stage (import, dup, rule, vlm, claude).
+ * Reasons are sanitized; duplicates of (asset, tag, stage, model, prompt_hash) are ignored.
+ * The caller owns the transaction.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{stage: string, model?: string, promptHash?: string}} opts
+ * @returns {(assetId: number, items: {tagId: number, confidence: number, reason?: string}[]) =>
+ *   {inserted: number, skipped: number}}
+ */
+export function suggestionWriter(db, { stage, model = '', promptHash = '' }) {
+  const ins = db.prepare(`INSERT OR IGNORE INTO asset_suggestions
+    (asset_id, tag_id, stage, confidence, reason, model, prompt_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  return (assetId, items) => {
+    const ts = now();
+    const seen = new Set();
+    const res = { inserted: 0, skipped: 0 };
+    for (const it of items) {
+      if (!it.tagId || seen.has(it.tagId)) continue;
+      seen.add(it.tagId);
+      const conf = Math.min(1, Math.max(0, Number(it.confidence)));
+      if (ins.run(assetId, it.tagId, stage, conf, sanitizeReason(it.reason), model, promptHash, ts).changes) res.inserted++;
+      else res.skipped++;
+    }
+    return res;
+  };
+}
+
+/**
+ * Records that a stage processed an asset (even when it produced no suggestion),
+ * so resumable runners can skip work already done. Re-recording updates status.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{assetId: number, stage: string, model?: string, promptHash?: string, status: 'ok'|'error', detail?: string, ms?: number}} r
+ */
+export function recordRun(db, { assetId, stage, model = '', promptHash = '', status, detail = null, ms = null }) {
+  db.prepare(`INSERT INTO suggestion_runs (asset_id, stage, model, prompt_hash, status, detail, ms, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (asset_id, stage, model, prompt_hash) DO UPDATE SET status = excluded.status, detail = excluded.detail,
+      ms = excluded.ms, created_at = excluded.created_at`)
+    .run(assetId, stage, model, promptHash, status, detail, ms, now());
 }
 
 /** Deterministic PRNG (LCG) so samples are reproducible from a seed. */
