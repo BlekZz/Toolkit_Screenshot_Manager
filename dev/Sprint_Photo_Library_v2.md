@@ -33,7 +33,17 @@
   4. 名稱含 `"` 無法以字串語法查詢 → 引號內支援 `\"`、`\\` 跳脫。
   5. 測試缺口（6 個存活 mutation：facet DISTINCT、smart 深度上限、刪除引用防護、前端排除／tagMode／未歸類）→ 新增 `test/filter.test.mjs` 與 catalog 補測，6 個 mutation 全數轉紅；`npm test` 62/62。
 - 延後：Sprint §5.2「依 album 分組顯示」未實作（P1 QA 不要求）→ 排入 P2。智慧相簿引用已刪除的相簿／tag 時安靜回 0 張（可接受，P2 再評估提示）。
-| P2 Triage 與裁剪 | ⏳ | |
+| P2 Triage 與裁剪 | 🔄 2026-11-01 開工 | 拆三段：P2a 核心後端 ✅ ∥ P2b 原地引用 ✅ → P2c 前端（Triage、crop UI、分組顯示）進行中。見下方 P2 紀錄 |
+
+### P2 紀錄（2026-11-01，後端）
+
+- P2b 原地引用（commit `971e9ca`）：`server/roots.mjs`、`routes-roots.mjs`、`cli/roots.mjs`。掃描三段式（只讀算 hash → 規劃 → 單一交易寫入），依 sha relink、找不到標 `missing`（metadata 保留，trashed 維持 trashed），佔位衝突以 `:relinking:`／`:missing:` 前綴 tombstone 處理（`:` 在 Windows 檔名不合法）。測試以掃描前後 root 內全部檔案的路徑＋sha256 快照證明不動使用者檔案。mutation 12／12＋主線抽查。
+  - 修正：sharp 預設檔案快取會持續鎖住原圖（Windows 上無法覆寫）→ `sharp.cache({ files: 0 })`。
+  - 限制：未來若有「清空回收桶」等刪原檔功能，必須排除 `mode='referenced'`。tombstone 列的 `rel_path` 為假值，顯示原位置需解析前綴。scan 與 import 同時寫同一 sha 時 scan 整批回滾（資料不壞，重跑即可）。
+- P2a 核心後端（commit `820bbee`）：`server/undo.mjs`（全域 LIFO，`events.undone_by`；catalog 所有 CRUD、A4 決定、trash、crop、bundle、快捷槽皆可撤銷；匯入與批次系統操作刻意不支援）、`triage.mjs`、`crops.mjs`、`routes-p2.mjs`、migration 007（events.undone_by、bundle_items 加 id）。undo 測試逐步比對 15 張表快照，28 步全還原。mutation 16／16＋主線抽查 2／2；`npm test` 183／183。
+  - crop 以 EXIF 轉正後座標為準，輸出 PNG 快取於 `thumbs/crops/`（刪 crop 後快取檔保留，清理機制待定）。
+  - 主線裁定：Z 為全域 undo（任何視圖的最後一個操作）；沒有可撤銷時顯示提示（API 404）。
+- 真實資料庫副本試套 006＋007：`user_version` 7、foreign_key_check 0、六張主表筆數不變。
 | P2.5 Migration | ⏳ | |
 | P3 文字整合 | ⏳ | |
 | P4 加值 | ⏳ | |
