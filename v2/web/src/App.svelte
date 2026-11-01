@@ -2,13 +2,18 @@
   import ContextMenu from './components/ContextMenu.svelte';
   import FilterBar from './components/FilterBar.svelte';
   import Grid from './components/Grid.svelte';
+  import GroupedGrid from './components/GroupedGrid.svelte';
   import ImportDialog from './components/ImportDialog.svelte';
   import Loupe from './components/Loupe.svelte';
   import Picker from './components/Picker.svelte';
   import Prompt from './components/Prompt.svelte';
+  import RootsDialog from './components/RootsDialog.svelte';
   import Sidebar from './components/Sidebar.svelte';
+  import Triage from './components/Triage.svelte';
   import { api, formatBytes, prefs } from './lib/api.js';
-  import { decodeHash, encodeHash, indexCatalog, isEmpty, pruneFilter, soleAlbum, toPayload } from './lib/filter.js';
+  import { decodeHash, emptyFilter, encodeHash, indexCatalog, isEmpty, pruneFilter, soleAlbum, toPayload } from './lib/filter.js';
+  import { buildGroups, chunks } from './lib/groups.js';
+  import { planUndo } from './lib/triageKeys.js';
 
   const BASE_SORTS = [
     { key: 'imported:desc', label: '匯入時間（新→舊）' },
@@ -40,6 +45,12 @@
   let refreshKey = $state(0);
   let grid = $state();
   let loupe = $state();
+  let triage = $state();
+  let triageOpen = $state(false);
+  let triageStart = $state(0);
+  let grouped = $state(prefs.get('grouped', false));
+  let groups = $state([]);
+  let rootsOpen = $state(false);
 
   const index = $derived(indexCatalog(catalog));
   const albumView = $derived(soleAlbum(filter));
@@ -97,6 +108,20 @@
   $effect(() => { filter; effectiveSort; runQuery(); });
   $effect(() => { prefs.set('sort', sort); });
   $effect(() => { prefs.set('cellSize', cellSize); });
+  $effect(() => { prefs.set('grouped', grouped); });
+
+  // 依相簿分組 (Sprint §5.2): album membership for the current result, ≤5000 ids per request.
+  let groupSeq = 0;
+  $effect(() => {
+    const current = ids;
+    refreshKey;
+    if (!grouped) return;
+    const mine = ++groupSeq;
+    if (!current.length) { groups = []; return; }
+    Promise.all(chunks(current).map((part) => api.albumsOf(part)))
+      .then((maps) => { if (mine === groupSeq) groups = buildGroups(current, Object.assign({}, ...maps)); })
+      .catch((e) => notify(e.message, true));
+  });
   /** Persist only explicit toggles, so a narrow-screen visit doesn't hide it on desktop. */
   function toggleSidebar() {
     showSidebar = !showSidebar;
@@ -351,6 +376,84 @@
     if (s) filter = { tags: {}, albums: {}, tagMode: 'all', albumMode: 'any', smart: s.id, q: '' };
   }
 
+  // ---- undo (global event stack) + trash -----------------------------------------
+
+  /** Local record of multi-event UI actions so Z reverses one keystroke (lib/triageKeys.js planUndo). */
+  // NB: not named `history` — that would shadow window.history used by the hash sync above.
+  let undoHistory = [];
+  function pushHistory(h) { undoHistory = [...undoHistory.slice(-49), h]; }
+
+  async function undoLast() {
+    let list;
+    try { list = await api.undoList(); } catch (e) { notify(e.message, true); return false; }
+    if (!list.length) { notify('沒有可撤銷的操作'); return false; }
+    const plan = planUndo(undoHistory, list);
+    let ok = false;
+    try {
+      if (plan.eventIds) {
+        for (const ev of plan.eventIds) await api.undo(ev);
+        notify(`已撤銷：${plan.label}`);
+      } else {
+        await api.undo();
+        notify(`已撤銷：${list[0].summary}`);
+      }
+      ok = true;
+    } catch (e) {
+      if (e.status === 404) notify('沒有可撤銷的操作');
+      else if (e.status === 409) notify(`無法撤銷：照片庫已被後續操作改變（${e.message}）`, true);
+      else notify(e.message, true);
+    }
+    undoHistory = plan.rest;
+    await refresh();
+    return ok;
+  }
+
+  /** R in the grid: soft-delete the selection (or the focused photo). Never deletes files. */
+  async function trashTargets() {
+    const assetIds = targetIds();
+    if (!assetIds.length) return;
+    try {
+      const r = await api.trash(assetIds);
+      pushHistory({ label: `R 移入垃圾桶 ${r.trashed} 張`, eventIds: [r.event_id] });
+      const skipped = r.skipped + r.skipped_missing;
+      notify(`已移入垃圾桶 ${r.trashed} 張${skipped ? `（略過 ${skipped}）` : ''}（Z 撤銷）`);
+    } catch (e) { notify(e.message, true); }
+    await refresh();
+  }
+
+  async function deleteCrop(c) {
+    try {
+      const r = await api.deleteCrop(c.id);
+      pushHistory({ label: `刪除裁剪 #${c.id}`, eventIds: [r.event_id] });
+      notify(`已刪除裁剪 #${c.id}${r.removed_bundle_items ? `（並移出 ${r.removed_bundle_items} 個 bundle 項目）` : ''}（Z 撤銷）`);
+    } catch (e) { notify(e.message, true); }
+    await refresh();
+  }
+
+  // ---- triage -----------------------------------------------------------------------
+
+  const triageSource = $derived(filter.smart === 'unfiled' && isEmpty({ ...filter, smart: null })
+    ? '未歸類' : isEmpty(filter) ? '全部照片' : '目前篩選');
+
+  /** Triage walks the current filter result; with no filter it defaults to 未歸類 (Sprint §7). */
+  async function openTriage() {
+    if (isEmpty(filter)) {
+      filter = { ...emptyFilter(), smart: 'unfiled' };
+      await runQuery();
+      triageStart = 0;
+    } else {
+      triageStart = Math.min(focus, Math.max(0, ids.length - 1));
+    }
+    loupeIndex = -1;
+    triageOpen = true;
+  }
+
+  function closeTriage(id) {
+    triageOpen = false;
+    const i = id == null ? -1 : ids.indexOf(id);
+    if (i >= 0) queueMicrotask(() => grid?.reveal(i));
+  }
+
   // ---- loupe + keyboard -------------------------------------------------------
 
   function openLoupe(i) { loupeIndex = i; }
@@ -366,8 +469,18 @@
   }
 
   function onkeydown(e) {
-    if (importing || picker || prompt || menu) return;
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    if (importing || picker || prompt || menu || rootsOpen) return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
+    if (triageOpen) {
+      if (triage?.handleKey(e)) e.preventDefault();
+      return;
+    }
+    // Z / Ctrl+Z = undo, in every view (global event stack).
+    if (e.key.toLowerCase() === 'z' && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      if (!e.repeat) undoLast();
+      return;
+    }
     if (loupeIndex >= 0) {
       if (loupe?.handleKey(e)) e.preventDefault();
       return;
@@ -378,6 +491,7 @@
       if (key === 'b') { e.preventDefault(); openPicker('albums', targetIds(), e.shiftKey ? 'remove' : 'add'); return; }
       if (key === '/') { e.preventDefault(); document.querySelector('[data-testid=query]')?.focus(); return; }
       if (key === '\\') { e.preventDefault(); toggleSidebar(); return; }
+      if (key === 'r' && !e.shiftKey) { e.preventDefault(); if (!e.repeat) trashTargets(); return; }
     }
     if (grid?.handleKey(e)) e.preventDefault();
   }
@@ -403,9 +517,11 @@
         {#if albumView != null}
           <button type="button" onclick={() => removeFromAlbum(albumView, [...selected])}>移出此相簿</button>
         {/if}
+        <button type="button" onclick={trashTargets} title="R（可用 Z 撤銷）">移入垃圾桶</button>
         <button type="button" onclick={() => (selected = new Set())} title="Esc">取消選取</button>
       </div>
     {/if}
+    <button type="button" class:on={grouped} onclick={() => (grouped = !grouped)} title="依相簿分組顯示" data-testid="group-toggle">依相簿分組</button>
     <select bind:value={sort} aria-label="排序">
       {#each sorts as s}<option value={s.key}>{s.label}</option>{/each}
     </select>
@@ -413,6 +529,8 @@
       <span aria-hidden="true">▦</span>
       <input type="range" min="96" max="360" step="12" bind:value={cellSize} aria-label="縮圖大小" />
     </label>
+    <button type="button" onclick={() => (rootsOpen = true)} title="原地引用資料夾">來源</button>
+    <button type="button" class="primary" onclick={openTriage} title="逐張分流目前結果（無篩選時＝未歸類）" data-testid="open-triage">Triage</button>
     <button type="button" class="primary" onclick={() => (importing = true)}>匯入</button>
   </header>
 
@@ -426,7 +544,11 @@
     {#if loadError}<p class="error">無法連線到 server：{loadError}</p>{/if}
     <FilterBar bind:filter {index} total={ids.length} error={queryError} onsave={saveSmart} />
     <div class="gridwrap">
-      <Grid bind:this={grid} {ids} {cellSize} bind:selected bind:focus filtered={!isEmpty(filter)} onopen={openLoupe} {oncellcontext} />
+      {#if grouped}
+        <GroupedGrid bind:this={grid} {ids} {groups} {cellSize} bind:selected bind:focus onopen={openLoupe} {oncellcontext} />
+      {:else}
+        <Grid bind:this={grid} {ids} {cellSize} bind:selected bind:focus filtered={!isEmpty(filter)} onopen={openLoupe} {oncellcontext} />
+      {/if}
     </div>
     <footer class="hints">
       <span><kbd>Enter</kbd> 開啟</span>
@@ -434,6 +556,8 @@
       <span><kbd>T</kbd> 加 Tag</span>
       <span><kbd>B</kbd> 加入相簿</span>
       <span><kbd>Shift+T</kbd>/<kbd>Shift+B</kbd> 移除</span>
+      <span><kbd>R</kbd> 垃圾桶</span>
+      <span><kbd>Z</kbd> 撤銷</span>
       <span><kbd>/</kbd> 查詢</span>
       <span>拖曳到側欄＝加入</span>
     </footer>
@@ -442,7 +566,16 @@
 
 {#if loupeIndex >= 0}
   <Loupe bind:this={loupe} {ids} bind:index={loupeIndex} catalogIndex={index} {refreshKey} onclose={closeLoupe}
-    onpick={(kind, id) => openPicker(kind, [id])} {onremove} />
+    onpick={(kind, id) => openPicker(kind, [id])} {onremove} oncropdelete={deleteCrop} />
+{/if}
+
+{#if triageOpen}
+  <Triage bind:this={triage} {ids} startIndex={triageStart} {catalog} catalogIndex={index} sourceLabel={triageSource}
+    {refreshKey} onrefresh={refresh} onundo={undoLast} onclose={closeTriage} {notify} {pushHistory} />
+{/if}
+
+{#if rootsOpen}
+  <RootsDialog onclose={() => (rootsOpen = false)} ondone={refresh} />
 {/if}
 
 {#if importing}
@@ -490,6 +623,7 @@
   .count b { color: var(--accent); font-weight: 600; }
   .spacer { flex: 1; }
   .selbar { display: flex; gap: 6px; }
+  .top button.on { background: var(--accent-soft); border-color: var(--accent); }
   .size { display: flex; align-items: center; gap: 6px; color: var(--muted); }
   .size input { width: 100px; accent-color: var(--accent); }
   .side { grid-area: side; min-height: 0; }

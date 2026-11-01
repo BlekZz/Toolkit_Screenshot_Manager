@@ -1,7 +1,7 @@
 async function request(url, init) {
   const res = await fetch(url, init);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(body.message || body.error || `HTTP ${res.status}`), { status: res.status });
   return body;
 }
 
@@ -40,10 +40,34 @@ export const api = {
 
   startImport: (path, recursive) => send('POST', '/api/import', { path, recursive }),
   importStatus: () => request('/api/import'),
+
+  // ---- P2: undo / trash / crops / bundles / triage slots / grouping / roots ----
+  undoList: () => request('/api/undo'),
+  /** No eventId = undo the newest undoable event (global stack). */
+  undo: (eventId) => send('POST', '/api/undo', eventId == null ? {} : { event_id: eventId }),
+  trash: (ids) => send('POST', '/api/assets/trash', { ids }),
+  restore: (ids) => send('POST', '/api/assets/restore', { ids }),
+  albumsOf: (ids) => send('POST', '/api/assets/albums', { ids }),
+  crops: (assetId) => request(`/api/assets/${assetId}/crops`),
+  createCrop: (assetId, rect) => send('POST', `/api/assets/${assetId}/crops`, rect),
+  deleteCrop: (cropId) => send('DELETE', `/api/crops/${cropId}`),
+  bundles: (status) => request(`/api/bundles${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  createBundle: (body = {}) => send('POST', '/api/bundles', body),
+  bundle: (id) => request(`/api/bundles/${id}`),
+  updateBundle: (id, body) => send('PATCH', `/api/bundles/${id}`, body),
+  addBundleItem: (id, body) => send('POST', `/api/bundles/${id}/items`, body),
+  removeBundleItem: (id, itemId) => send('DELETE', `/api/bundles/${id}/items/${itemId}`),
+  slots: () => request('/api/settings/triage-slots'),
+  putSlots: (slots) => send('PUT', '/api/settings/triage-slots', slots),
+  roots: () => request('/api/roots'),
+  addRoot: (path) => send('POST', '/api/roots', { path }),
+  scanRoot: (id, dryRun = false) => send('POST', `/api/roots/${id}/scan`, { dry_run: dryRun }),
+  scanStatus: () => request('/api/roots/scan'),
 };
 
 export const thumbUrl = (id, size = 256) => `/media/thumb/${id}?size=${size}`;
 export const originalUrl = (id) => `/media/original/${id}`;
+export const cropUrl = (cropId) => `/media/crop/${cropId}`;
 
 /** localStorage wrapper that never throws (private mode / blocked storage). */
 export const prefs = {

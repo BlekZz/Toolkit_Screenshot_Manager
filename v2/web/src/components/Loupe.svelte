@@ -1,8 +1,8 @@
 <script>
-  import { api, formatBytes, originalUrl, thumbUrl } from '../lib/api.js';
+  import { api, cropUrl, formatBytes, originalUrl, thumbUrl } from '../lib/api.js';
 
   /** Single-image viewer: fit / zoom around cursor / drag pan / prev-next. */
-  let { ids, index = $bindable(0), catalogIndex, refreshKey = 0, onclose, onpick, onremove } = $props();
+  let { ids, index = $bindable(0), catalogIndex, refreshKey = 0, onclose, onpick, onremove, oncropdelete } = $props();
 
   const MIN_ZOOM = 0.05;
   const MAX_ZOOM = 16;
@@ -20,6 +20,16 @@
   let drag = null;
 
   const id = $derived(ids[index]);
+
+  // Non-destructive crops of this image (P2): preview /media/crop/:id, delete = row only.
+  let crops = $state([]);
+  let preview = $state(null);
+  $effect(() => {
+    const current = id;
+    refreshKey;
+    preview = null;
+    api.crops(current).then((c) => { if (current === id) crops = c; }).catch(() => { if (current === id) crops = []; });
+  });
 
   let shownId = null;
   $effect(() => {
@@ -94,7 +104,8 @@
       case 'ArrowRight': case 'd': go(1); return true;
       case 'Home': index = 0; fitted = true; return true;
       case 'End': index = ids.length - 1; fitted = true; return true;
-      case 'Escape': case 'Enter': onclose?.(); return true;
+      case 'Escape': if (preview) { preview = null; return true; } onclose?.(); return true;
+      case 'Enter': onclose?.(); return true;
       case 'i': showInfo = !showInfo; return true;
       case 't': onpick?.('tags', id); return true;
       case 'b': onpick?.('albums', id); return true;
@@ -134,6 +145,13 @@
     {#if error}<p class="error">{error}</p>{/if}
   </div>
 
+  {#if preview}
+    <div class="preview" role="presentation" onclick={() => (preview = null)} data-testid="crop-preview">
+      <img src={cropUrl(preview.id)} alt={`裁剪 #${preview.id}`} />
+      <span>裁剪 #{preview.id} · 點一下或 Esc 關閉</span>
+    </div>
+  {/if}
+
   <header class="bar">
     <button type="button" onclick={() => onclose?.()} title="返回 grid（Esc）">← 返回</button>
     <span class="name">{detail?.filename ?? ''}</span>
@@ -168,6 +186,22 @@
         {#each detail.albums as a (a)}
           <span class="pill">▣ {catalogIndex.albumById.get(a)?.name ?? `#${a}`}<button type="button" onclick={() => onremove?.('albums', a, id)} aria-label="移出">×</button></span>
         {:else}<p class="none">無</p>{/each}
+      </section>
+      <section class="member" data-testid="loupe-crops">
+        <h4>裁剪 <span>{crops.length}</span></h4>
+        <div class="crops">
+          {#each crops as c (c.id)}
+            <figure class="crop" data-crop={c.id}>
+              <button type="button" class="thumb" onclick={() => (preview = c)} title="預覽">
+                <img src={cropUrl(c.id)} alt={`裁剪 #${c.id}`} loading="lazy" />
+              </button>
+              <figcaption>
+                {Math.round(c.w * (detail.width ?? 0))}×{Math.round(c.h * (detail.height ?? 0))}{c.ratio_label ? ` · ${c.ratio_label}` : ''}
+                <button type="button" onclick={() => oncropdelete?.(c)} aria-label="刪除裁剪" title="刪除裁剪（原圖不受影響，Z 撤銷）">×</button>
+              </figcaption>
+            </figure>
+          {:else}<p class="none">無</p>{/each}
+        </div>
       </section>
     </aside>
   {/if}
@@ -226,6 +260,16 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; }
   .none { margin: 0; color: #6b6b66; font-size: 12px; }
   .error { position: absolute; inset: 0; display: grid; place-content: center; color: #ff7a66; }
+  .member h4 span { font-weight: 400; }
+  .crops { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .crop { margin: 0; background: #2a2a28; border-radius: 6px; overflow: hidden; }
+  .crop .thumb { display: block; width: 100%; height: 80px; padding: 0; border: 0; border-radius: 0; background: #151514; }
+  .crop .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .crop figcaption { display: flex; justify-content: space-between; align-items: center; padding: 2px 2px 2px 6px; font-size: 11px; color: #9a9a94; }
+  .crop figcaption button { padding: 0 6px; background: none; border: 0; color: #9a9a94; }
+  .preview { position: absolute; inset: 48px 0 0 0; z-index: 2; display: grid; place-items: center; background: rgba(0, 0, 0, 0.85); cursor: zoom-out; }
+  .preview img { max-width: 92%; max-height: 86%; object-fit: contain; }
+  .preview span { position: absolute; bottom: 12px; color: #9a9a94; font-size: 12px; }
   @media (max-width: 640px) {
     .info { left: 12px; right: 12px; width: auto; top: auto; bottom: 12px; max-height: 40%; }
     .zoom, .bar button:nth-of-type(n + 2) { display: none; }
