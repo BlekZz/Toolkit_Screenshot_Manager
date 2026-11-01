@@ -250,9 +250,12 @@ export function createCatalog(db) {
           if (row) { removed++; undoRemove.push([a, t, row.source, row.added_at]); }
         }
       }
-      logEvent(db, 'tags.apply', { assets: ids.length, add: addIds, remove: removeIds, added, removed },
-        { op: 'tags.apply', added: undoAdd, removed: undoRemove });
-      return { added, removed };
+      // No-op applies leave no event, so Z never "undoes" nothing.
+      const eventId = added || removed
+        ? logEvent(db, 'tags.apply', { assets: ids.length, add: addIds, remove: removeIds, added, removed },
+          { op: 'tags.apply', added: undoAdd, removed: undoRemove })
+        : null;
+      return { added, removed, event_id: eventId };
     });
   }
 
@@ -355,9 +358,11 @@ export function createCatalog(db) {
       const ts = now();
       const added = [];
       for (const a of ids) if (ins.run(al.id, a, ++pos, ts).changes) added.push(a);
-      logEvent(db, 'album.add', { album_id: al.id, requested: ids.length, added: added.length },
-        { op: 'album.remove', album_id: al.id, asset_ids: added });
-      return { added: added.length };
+      const eventId = added.length
+        ? logEvent(db, 'album.add', { album_id: al.id, requested: ids.length, added: added.length },
+          { op: 'album.remove', album_id: al.id, asset_ids: added })
+        : null;
+      return { added: added.length, event_id: eventId };
     });
   }
 
@@ -371,9 +376,11 @@ export function createCatalog(db) {
         const row = del.get(al.id, a);
         if (row) removed.push([a, row.position, row.added_at]);
       }
-      logEvent(db, 'album.remove', { album_id: al.id, requested: ids.length, removed: removed.length },
-        { op: 'album.add', album_id: al.id, items: removed });
-      return { removed: removed.length };
+      const eventId = removed.length
+        ? logEvent(db, 'album.remove', { album_id: al.id, requested: ids.length, removed: removed.length },
+          { op: 'album.add', album_id: al.id, items: removed })
+        : null;
+      return { removed: removed.length, event_id: eventId };
     });
   }
 

@@ -159,8 +159,8 @@
 
   const later = () => run(async (assetId) => {
     if (!laterTag) throw new Error(`找不到系統 tag「${LATER_PATH}」`);
-    await api.applyTags({ asset_ids: [assetId], add: [laterTag.id] });
-    pushHistory?.({ label: 'E 稍後處理', eventIds: [] });
+    const r = await api.applyTags({ asset_ids: [assetId], add: [laterTag.id] });
+    if (r.event_id) pushHistory?.({ label: 'E 稍後處理', eventIds: [r.event_id] });
     bump('e');
     return `已標記「${LATER_PATH}」（Z 撤銷）`;
   }, { advance: true });
@@ -184,10 +184,11 @@
     if (!detail || detail.id !== id) return;
     const on = slotActive(slot, detail);
     return run(async (assetId) => {
-      if (slot.kind === 'tag') await api.applyTags({ asset_ids: [assetId], [on ? 'remove' : 'add']: [slot.id] });
-      else if (on) await api.removeFromAlbum(slot.id, [assetId]);
-      else await api.addToAlbum(slot.id, [assetId]);
-      pushHistory?.({ label: `${n + 1} ${slot.name}`, eventIds: [] });
+      let r;
+      if (slot.kind === 'tag') r = await api.applyTags({ asset_ids: [assetId], [on ? 'remove' : 'add']: [slot.id] });
+      else if (on) r = await api.removeFromAlbum(slot.id, [assetId]);
+      else r = await api.addToAlbum(slot.id, [assetId]);
+      if (r?.event_id) pushHistory?.({ label: `${n + 1} ${slot.name}`, eventIds: [r.event_id] });
       bump('slot');
       const what = slot.kind === 'tag' ? `tag「${catalogIndex.tagPath(slot.id) || slot.name}」` : `相簿「${slot.name}」`;
       return `${on ? '已移除' : '已套用'} ${what}（Z 撤銷）`;

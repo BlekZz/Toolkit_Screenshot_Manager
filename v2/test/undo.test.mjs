@@ -116,6 +116,26 @@ describe('20+ mixed steps, undone one by one, each undo restores the exact pre-s
 });
 
 describe('undo engine rules (HTTP)', () => {
+  test('tag/album apply returns event_id; no-op applies log no undoable event', async () => {
+    const a = asset();
+    const tag = await ok('POST', '/api/tags', { name: 'noop-check' });
+    const al = await ok('POST', '/api/albums', { name: 'noop-album' });
+    const count = () => db.prepare("SELECT COUNT(*) AS n FROM events WHERE action IN ('tags.apply', 'album.add', 'album.remove')").get().n;
+
+    const t1 = await ok('POST', '/api/tags/apply', { asset_ids: [a], add: [tag.id] });
+    assert.ok(Number.isInteger(t1.event_id));
+    const a1 = await ok('POST', `/api/albums/${al.id}/add`, { asset_ids: [a] });
+    assert.ok(Number.isInteger(a1.event_id));
+    const before = count();
+    const t2 = await ok('POST', '/api/tags/apply', { asset_ids: [a], add: [tag.id] }); // already tagged
+    const a2 = await ok('POST', `/api/albums/${al.id}/add`, { asset_ids: [a] }); // already in album
+    const r2 = await ok('POST', `/api/albums/${al.id}/remove`, { asset_ids: [asset()] }); // not in album
+    assert.deepEqual([t2.event_id, a2.event_id, r2.event_id], [null, null, null]);
+    assert.equal(count(), before);
+    const u = await ok('POST', '/api/undo');
+    assert.equal(u.undone_event_id, a1.event_id, 'Z undoes the last real change, not a no-op');
+  });
+
   test('trash → undo restores active; restore of a since-missing asset is skipped, not forced', async () => {
     const [a, b, m] = [asset(), asset(), asset('missing')];
     const tr = await ok('POST', '/api/assets/trash', { ids: [a, b, m] });
