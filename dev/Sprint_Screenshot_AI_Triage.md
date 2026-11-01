@@ -12,7 +12,7 @@
 | A2 建議 UI | ⏳ | 依賴 v2 P2 Triage |
 | A3 本機 VLM | ✅ 2026-11-01 | 全庫涵蓋 99.3%（4b＋8b 補跑）；只有 receipt 達預選門檻（見 A3 紀錄） |
 | A4 動作綁定 | 🔄 | 後端（決定 API＋綁定表）先行，UI 隨 A2；bundle＋OCR 動作待 P3 |
-| A5 雲端開關 | ⏳ | 外送閘依 Q8 裁定：只送人工確認非 sensitive 且非 chat 的圖 |
+| A5 雲端開關 | ⏳ | 外送閘依 Q8 裁定：只送人工確認非 sensitive 且非 chat 的圖；第一版走分類總表＋手動貼回（§4.1） |
 
 ### A0 紀錄（2026-11-01）
 
@@ -219,6 +219,16 @@ asset_suggestions(
 3. bundle 的 LLM 整合／翻譯維持原 D5。
 4. 一次性例外（2026-11-01，Blake 明示要求）：用 Claude Code subagent 初標 `Input/` 964 張＋`staging/` 226 張，結果只存在 gitignored 的 `state/claude-labels*/`。
 
+### 4.1 A5 設計補充：分類總表＋手動貼回（2026-11-01 Blake 同意，參考外部「照片影片自動分類器」指令包）
+
+- **第一版＝手動貼回模式，不接 API**：工具產出「分類總表」圖片與提示詞 → Blake 自己貼到 Claude 對話 → 回覆貼回工具 → 經 `importLabels` 轉成 stage `claude` 的**建議**（不直接套 tag）。不需存放 API key、不需成本確認流程，送出前 Blake 看得到總表內容。API 模式延後到手動模式驗證後再評估。
+- **外送閘照舊**：總表只能放通過 Q8 閘的 asset（人工確認非 sensitive、且無任何 `purpose/chat` 建議或 tag），server 端產總表時檢查，不靠 UI。
+- **總表格式**：外部做法 7×7 格、每格 224px（照片用），但截圖文字在 224px 下不可讀；本專案起始值 4 欄、每格約 390px（寬 1568px），每張約 12 張截圖。[inference] 依 Claude 圖片 token ≈ 像素數／750 推算，每張成本約為單張送出的 1／6，實際以量測為準。
+- **編號用 asset id，不用流水號**：外部工具「重新下載總表會重排編號」是已知陷阱；格子左上角印 `#<asset id>`，回覆永遠對得回同一張。
+- **寬鬆解析回覆**：接受 JSON 物件、`{"results":[…]}` 陣列、一行一筆的 `#id：類別`／`id. 類別`／`id - 類別`（全形半形冒號）；類別名稱先完全比對、再互相包含比對。**對不上的不產生建議**（外部做法是歸「其他」，與本專案「AI 只提建議」不符）。可分批貼回、結果累加、重貼冪等（沿用 UNIQUE 鍵）。
+- **採用前提（A5 QA 新增）**：以 50 張已確認樣本比較「總表分類」vs「單張分類（`state/claude-labels/` 既有結果）」的各 purpose precision／recall；總表任一 purpose precision 比單張低 0.1 以上 → 調大格子（3 欄）再測，仍不行則退回單張送出。
+- 不採用：單一 HTML 無資料庫架構、強制分類（無建議／決定分離）、檔案大小＋三段 hash 的重複偵測（抓不到重新壓縮，dHash 已涵蓋）、檔名判斷截圖、展示動畫。
+
 ## 5. 用途 → 動作綁定
 
 - 動作只在**人接受建議時**觸發。首批動作：加入 album、建立 bundle 並排 OCR、加 `triage/later`。
@@ -240,7 +250,7 @@ asset_suggestions(
 | A2 | 建議 UI | Triage 顯示建議（Enter 接受、數字鍵覆寫）、Grid 批次接受、回顧 Smart Album | A1、v2 P2 Triage |
 | A3 | 本機 VLM | S2 JSON 分類、job 佇列、CLI；與 Claude 初標對照 | A0（可與 A1 並行） |
 | A4 | 動作綁定 | 接受後動作；收據抽取（等 P3） | A2 |
-| A5 | 雲端開關 | S3 Claude、外送閘、成本預估確認 | A3 |
+| A5 | 雲端開關 | S3 Claude 外送閘；第一版＝分類總表＋手動貼回（§4.1），API 模式與成本預估確認延後 | A3 |
 
 ### 7.1 各里程碑 QA（草案）
 
@@ -249,7 +259,7 @@ asset_suggestions(
 - A2：接受 → `asset_tags.source='ai'` 且可 undo；拒絕 → `rejected` 且 tag 不變；回顧 Smart Album 排序符合年齡×類型。
 - A3：`reason` 欄在落庫前經程式過濾（連續 4 位以上數字、email、電話樣式一律遮蔽）——2026-11-01 實測 qwen3-vl:8b 違反 prompt 把卡號末四碼寫進 reason，不能只靠 prompt；VLM 輸出不合 schema 時記錄錯誤、不產生建議；拔網路仍可完整跑 S0–S2；**在 GPU 無其他負載下**量測每張耗時。
 - A4：任何綁定動作都不改 `assets.status`（不變式測試）；`trash` 類動作在 DB CHECK 與 API 兩層都被拒；接受可精確 undo（狀態、AI tag、相簿項目）。
-- A5：開關關閉時 S3 端點回 403；帶 `sensitive` 的 asset 直打 API 回 403；**未經人工確認非 sensitive、或帶 `purpose/chat`（建議或 tag）的 asset 回 403**（Q8）；API key 不出現在 DB／log。
+- A5：總表 vs 單張分類在 50 張樣本上的比較結果已記錄且符合 §4.1 採用前提；總表格子印 asset id，重產總表後舊回覆仍對得上；回覆解析器對各格式與無法比對類別（不產生建議）有測試；開關關閉時 S3 端點回 403；帶 `sensitive` 的 asset 直打 API 回 403；**未經人工確認非 sensitive、或帶 `purpose/chat`（建議或 tag）的 asset 回 403**（Q8）；API key 不出現在 DB／log。
 
 ## 8. 為何不是純 skill（記錄取捨與實測）
 

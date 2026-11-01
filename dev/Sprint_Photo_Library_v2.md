@@ -255,7 +255,7 @@ Bundle(有序 asset/crop)
 | P1 | 歸類與 filter | Album / Tag CRUD（含分層、巢狀）、批次套用、查詢 AST + 編譯器、三態側欄、chip、facet、Smart Album | **本次核心需求** |
 | P2 | Triage 與裁剪 | Triage 模式、快捷槽、非破壞 crop、undo（events）、trash、原地引用 roots + relink | 可取代舊工具日常分流 |
 | P2.5 | Migration | 舊 `Input/`、`staging/*`、`archive/`、`output/` → v2（資料夾轉系統 tag，例如 `migration/keep`） | 舊工具退役 |
-| P3 | 文字整合 | Bundle、OCR 接管、FTS、LLM 整合翻譯、外送閘、md 匯出 | 舊 OCR 管線完整接管並升級 |
+| P3 | 文字整合 | Bundle、OCR 接管、FTS、LLM 整合翻譯、外送閘、md 匯出、**資料夾匯出**（2026-11-01 追加：相簿／tag／smart album → 複製到 `exports/整理好的檔案_<yyyymmdd-HHmm>/<分類>/`，附 CSV 清單） | 舊 OCR 管線完整接管並升級 |
 | P4 | 加值 | AI tag 建議、相似 / 重複圖偵測、Tauri 評估 | — |
 
 ### 10.1 各里程碑 QA
@@ -291,6 +291,7 @@ Bundle(有序 asset/crop)
 - [ ] OCR 原文 revision 在 LLM 執行後仍存在且未被修改。
 - [ ] `text:"…"` 可搜到 OCR 與 LLM revision 內容。
 - [ ] API key 不出現在 DB、log、events（grep 實測）。
+- [ ] 資料夾匯出：只複製、不移動不刪原圖（匯出前後原圖路徑＋sha256 快照一致）；同資料夾檔名衝突加「 (2)」；CSV（檔名、資料夾、asset id、原始路徑）開頭有 UTF-8 BOM，Excel 開啟中文正常；trashed／missing 不匯出。
 
 ## 11. 最終驗收 checklist
 
