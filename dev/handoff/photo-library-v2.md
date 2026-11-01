@@ -1,6 +1,6 @@
 # Photo Library v2 重建 [ACTIVE]
 - updated: 2026-11-01 (claude)
-- base: 37f9ace
+- base: 01d8940
 <!-- 查核: 2026-11-01 -->
 - identity: {"executor":"claude","device":"desktop","host":"DESKTOP-20251004","session_id":"4ebbf730-be62-4d59-aad2-31ec78c7ad3e","session_name":"unknown","identity_source":"scratchpad-path"}
 - 停點: P0 ✅、P1 ✅、P2 QA ✅（獨立驗收四條＋紅線全 PASS，見 Sprint P2 驗收紀錄）。
