@@ -10,7 +10,7 @@
 | A0 評估基線 | ✅ 2026-11-01 | 見下方 A0 紀錄 |
 | A1 便宜層 | ✅ 2026-11-01 | 後端與 CLI 完成並已在真實庫執行；matcher UI 移至 A2。sensitive 規則 recall 39%，未達 S3 前提 |
 | A2 建議 UI | ⏳ | 依賴 v2 P2 Triage |
-| A3 本機 VLM | 🔄 | 程式完成、50 張評估完成（見 A3 紀錄）；全庫執行中 |
+| A3 本機 VLM | ✅ 2026-11-01 | 全庫涵蓋 99.3%（4b＋8b 補跑）；只有 receipt 達預選門檻（見 A3 紀錄） |
 | A4 動作綁定 | ⏳ | |
 | A5 雲端開關 | ⏳ | 依賴 A3 sensitive 規則層驗收 |
 
@@ -79,7 +79,12 @@
   - [fact] context/work 過度判定（FP 13），custom topics 亂貼（P 35%）→ 這兩類 VLM 建議預設不顯示或排在最後，待 A2 UI 決定。
   - [fact] 與 Claude 初標對照（`vlm compare`，兩者都跑過的 66 張）：purpose 一致 48／66、context 一致 43／66；sensitive 只有 Claude 判定的 26 張、只有 VLM 判定的 0 張。
   - [inference] 答案集是 Claude 預套 tag 後 Blake 確認的結果，對 VLM 不構成錨定，但答案本身偏向 Claude 的切法。
-- 全庫背景執行中（約 1,270 張）。
+- 全庫執行（2026-11-01）：4b 跑 1,271 張共 3.0 小時（每張中位數 7.0 秒、p90 12.5 秒），ok 1,215、錯誤 56。
+  - [fact] 56 張全部是模型輸出失控（`done_reason=length`，JSON 空白或截斷），temperature 0 下每次重跑結果相同；長寬比與 OCR 字數和成功的圖沒有差別。
+  - 修正（commit `b04132c`，mutation 3／3）：`num_predict` 768 上限、壞 JSON 以 temperature 0.7 重試一次、輸出錯誤不觸發暫停。重跑補回 16 張。
+  - 剩下 40 張改用 `qwen3-vl:8b`：補回 31 張（每張中位數 7.6 秒）。
+  - **涵蓋率 1,315／1,324（99.3%）**；剩 9 張沒有 VLM 建議，留給人工判斷。
+
 
 ## 最終驗收 checklist
 

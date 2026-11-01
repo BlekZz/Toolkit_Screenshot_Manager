@@ -1,10 +1,10 @@
 # 截圖 AI 分流建議 [ACTIVE]
 - updated: 2026-11-01 (claude)
-- base: d29c9c6
+- base: b04132c
 <!-- 查核: 2026-11-01 -->
 - identity: {"executor":"claude","device":"desktop","host":"DESKTOP-20251004","session_id":"4ebbf730-be62-4d59-aad2-31ec78c7ad3e","session_name":"unknown","identity_source":"scratchpad-path"}
-- 停點: A0 ✅、A1 ✅（真實庫已跑 dup／OCR／rules）；A3 程式完成、50 張評估完成，全庫 VLM 背景執行中（可續跑，中斷後重跑 `node cli/vlm.mjs run --library D:/PhotoLibrary` 即接續）。
-- 下一步: VLM 全庫跑完後把 A3 標 ✅；Blake 裁定 Sprint §9 Q8（sensitive 補強方式）；A2 建議 UI 依賴 v2 P2 Triage。
+- 停點: A0 ✅、A1 ✅、A3 ✅（全庫 VLM 涵蓋 1,315／1,324；4b 固定失控的 40 張改用 8b 補跑 31 張）。
+- 下一步: Blake 裁定 Sprint §9 Q8（sensitive 補強方式）→ 決定 A5 開關前提；A2 建議 UI 依賴 v2 P2 Triage；A4 動作綁定。
 - 切入: dev/Sprint_Screenshot_AI_Triage.md（A1／A3 紀錄、§9）, v2/server/rules.mjs, v2/server/vlm.mjs
 - 待裁: Sprint §9 Q8——sensitive 規則層 recall 39%，S3 外送開關維持鎖定；補強方式待 Blake 決定。
 - 事實:
