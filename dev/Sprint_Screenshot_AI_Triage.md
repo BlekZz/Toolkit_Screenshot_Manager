@@ -11,8 +11,8 @@
 | A1 便宜層 | ✅ 2026-11-01 | 後端與 CLI 完成並已在真實庫執行；matcher UI 移至 A2。sensitive 規則 recall 39%，未達 S3 前提 |
 | A2 建議 UI | ⏳ | 依賴 v2 P2 Triage |
 | A3 本機 VLM | ✅ 2026-11-01 | 全庫涵蓋 99.3%（4b＋8b 補跑）；只有 receipt 達預選門檻（見 A3 紀錄） |
-| A4 動作綁定 | ⏳ | |
-| A5 雲端開關 | ⏳ | 依賴 A3 sensitive 規則層驗收 |
+| A4 動作綁定 | 🔄 | 後端（決定 API＋綁定表）先行，UI 隨 A2；bundle＋OCR 動作待 P3 |
+| A5 雲端開關 | ⏳ | 外送閘依 Q8 裁定：只送人工確認非 sensitive 且非 chat 的圖 |
 
 ### A0 紀錄（2026-11-01）
 
@@ -52,6 +52,19 @@
   - [fact] 試算「有 chat 建議就視為 sensitive」：P 75%／R 65%。
   - [inference] 漏掉的主要是私人對話（沒有關鍵字可抓）與成人內容（OCR 抓不到）；要再提高 recall，需要 App 來源訊號（LINE 等）或把 chat 預設視為 sensitive，屬政策決定，列入 §9 待裁。
 - **結論：sensitive 規則層未達 S3 開關前提，A5 雲端開關維持鎖定。**
+
+### A4 紀錄（2026-11-01，後端）
+
+- 程式：migration `006_tag_actions.sql`（`tag_actions`，kind CHECK 只允許 `album`／`tag`；種子 `purpose/receipt` → 相簿「收據」、`purpose/ephemeral` → tag `triage/later`）、`v2/server/decisions.mjs`、`v2/server/routes-decisions.mjs`（`GET /api/assets/:id/suggestions`、`POST /api/suggestions/accept|reject|undo`、`/api/tag-actions` CRUD）。commit `f74c09a`，`npm test` 146／146；實作 agent mutation 13／13，主線抽查 2／2 被殺。
+- 行為：
+  - 接受：寫 `asset_tags(source='ai')`；同 asset 同 tag 其他來源的建議一併 accepted；purpose 單選，其他 purpose pending 建議改 superseded；執行綁定動作。整批單一交易，任一筆非 pending → 409 全部回滾。
+  - undo：精確反轉——狀態只在仍是該決定所設時才改回、只刪仍為 `source='ai'` 的 tag、移除加入的相簿項目、新建且已空的相簿刪除；同一決定只能 undo 一次（409）。
+  - 不變式測試：接受庫內全部建議後 `assets.status` 完全不變；`kind:'trash'` 在 API（400）與 DB CHECK 都被拒。
+- 真實資料庫副本試套 006：`user_version` 6，兩條種子綁定正確建立（正式庫在下次開啟時套用）。
+- 主線決定（claude，可改）：
+  - 已有人工 purpose tag 時接受另一個 AI purpose 建議，兩個 tag 並存——AI 決定不刪除使用者手動加的 tag。
+  - 綁定動作加上的 tag（如 `triage/later`）不連帶處理同 tag 的 pending 建議，只有被接受的 tag 會連帶。
+- 未做：文字筆記「建 bundle＋排 OCR」動作待 P3；UI（接受鍵、綁定設定頁）隨 A2。
 
 ### A3 紀錄（2026-11-01）
 
@@ -235,7 +248,8 @@ asset_suggestions(
 - A1：重複圖 fixture（同圖、縮放、重新壓縮）全數命中；規則改動後重跑可重現。
 - A2：接受 → `asset_tags.source='ai'` 且可 undo；拒絕 → `rejected` 且 tag 不變；回顧 Smart Album 排序符合年齡×類型。
 - A3：`reason` 欄在落庫前經程式過濾（連續 4 位以上數字、email、電話樣式一律遮蔽）——2026-11-01 實測 qwen3-vl:8b 違反 prompt 把卡號末四碼寫進 reason，不能只靠 prompt；VLM 輸出不合 schema 時記錄錯誤、不產生建議；拔網路仍可完整跑 S0–S2；**在 GPU 無其他負載下**量測每張耗時。
-- A5：開關關閉時 S3 端點回 403；帶 `sensitive` 的 asset 直打 API 回 403；API key 不出現在 DB／log。
+- A4：任何綁定動作都不改 `assets.status`（不變式測試）；`trash` 類動作在 DB CHECK 與 API 兩層都被拒；接受可精確 undo（狀態、AI tag、相簿項目）。
+- A5：開關關閉時 S3 端點回 403；帶 `sensitive` 的 asset 直打 API 回 403；**未經人工確認非 sensitive、或帶 `purpose/chat`（建議或 tag）的 asset 回 403**（Q8）；API key 不出現在 DB／log。
 
 ## 8. 為何不是純 skill（記錄取捨與實測）
 
@@ -256,7 +270,7 @@ asset_suggestions(
   - `custom/旅遊`：景點、行程、交通
 
   未納入「交友」「命理」：涉及個人隱私、或數量少，由 Blake 需要時自行建立。
-- **Q8**（A1 實測後新增，待 Blake 裁定）：sensitive 規則層 recall 只有 39%，主要漏掉私人對話與成人內容。S3 外送開關前要補哪種訊號？
+- ~~Q8~~（2026-11-01 Blake 裁定：(c)＋(a)）：S3 只對已人工確認「非 sensitive」的圖開放，且有任何 `purpose/chat` 建議或 tag 的圖一律視為 sensitive、不外送。A5 外送閘依此實作與驗收。原題：sensitive 規則層 recall 只有 39%，主要漏掉私人對話與成人內容。S3 外送開關前要補哪種訊號？
   - (a) 只要有 `purpose/chat` 建議就視為 sensitive：50 張試算 R 65%、P 75%，實作最簡單，但所有聊天截圖都無法外送。
   - (b) App 來源訊號（LINE、銀行 App 的介面特徵或 EXIF／檔名）：較精準，但需另外實作與驗證。
   - (c) 不補，S3 永久只對已人工確認「非 sensitive」的圖開放。
