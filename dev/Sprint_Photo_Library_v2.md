@@ -33,7 +33,7 @@
   4. 名稱含 `"` 無法以字串語法查詢 → 引號內支援 `\"`、`\\` 跳脫。
   5. 測試缺口（6 個存活 mutation：facet DISTINCT、smart 深度上限、刪除引用防護、前端排除／tagMode／未歸類）→ 新增 `test/filter.test.mjs` 與 catalog 補測，6 個 mutation 全數轉紅；`npm test` 62/62。
 - 延後：Sprint §5.2「依 album 分組顯示」未實作（P1 QA 不要求）→ 排入 P2。智慧相簿引用已刪除的相簿／tag 時安靜回 0 張（可接受，P2 再評估提示）。
-| P2 Triage 與裁剪 | 🔄 實作完成，待驗收 | P2a 核心後端 ✅、P2b 原地引用 ✅、P2c 前端 ✅（見下方 P2 紀錄）；待 fresh-context 獨立驗收＋Blake 以真實照片庫試用 |
+| P2 Triage 與裁剪 | ✅ QA 通過（2026-11-01）／待 Blake 試用 | 獨立驗收 §10.1 P2 四條全 PASS、紅線全 PASS（見 P2 驗收紀錄）；「可取代舊工具日常分流」待 Blake 以真實照片庫試用確認 |
 
 ### P2 紀錄（2026-11-01，後端）
 
@@ -49,6 +49,17 @@
   - 補後端缺口（commit `b37e114`）：tag／相簿套用回傳 `event_id`；無實際變動不記可撤銷事件（Z 不會撤到空操作），mutation 3／3。
   - 主線裁定（可改）：W 未框選＝拒絕並提示；G＝有 open bundle 就結束、沒有就開新的；Z 還原後游標停在原處。
   - 未做：Triage 鍵位自訂（§7「可自訂」）、進入 Triage 的快捷鍵、觸控、5 萬張分組 grid 效能。
+
+### P2 驗收紀錄（2026-11-01，fresh-context agent，真實入口）
+
+- 方法：CLI 匯入 fixture → `node server/index.mjs` → 全部操作打 HTTP；DB 以唯讀 `node:sqlite` 快照比對；Playwright 實按一輪鍵位。未修改 repo、未碰 `D:/PhotoLibrary`。
+- QA1 未歸類來源：套 tag／加相簿／E／R 各一張後 `POST /api/query` total 16→12，6 次 undo 回 16 — PASS。
+- QA2 undo：混合 23 步，每步前快照全部表，逆序 23 次 undo 每次與該步前快照逐列相同；比對器自證能抓差異（撤銷前 7 張表不同）— PASS。
+- QA3 非破壞 crop：EXIF orientation 6 的 JPEG 與 PNG，6 個框輸出尺寸皆＝round(w·W)×round(h·H)，轉正方向以色塊驗證；原圖 sha256 全程不變；越界框 400 — PASS。
+- QA4 原地引用：搬檔重掃 relinked=1、id 不變、tag／album 保留；刪檔 → missing、metadata 保留；放回 → active；三次掃描前後 root 內路徑＋sha256 完全相同 — PASS。
+- 紅線：接受 AI 建議對 active／trashed／missing 皆不改 status；trash 類 tag-action 在 API（含 PATCH、大小寫變體）與 DB CHECK 皆被拒；trash 為軟刪除；刪檔路徑審查（server／cli 無 `DELETE FROM assets`，3 處 rmSync 皆碰不到使用者原圖或 referenced root）；只監聽 127.0.0.1（其他介面連線被拒）— 全 PASS。
+- 發現並修正（commit 見下）：library 位於深路徑（crop 快取路徑 > 260 字元）時 `/media/crop` 回 500（libvips 不支援 Windows 長路徑）→ 改由 sharp 輸出 buffer、Node 寫檔；回歸測試＋mutation 1／1。W 裁剪模式提示誤寫「不框選＝整張」→ 依 Q／W 顯示不同提示。
+- 未驗：5 萬張規模效能、409 衝突路徑的 UI、Shift+G 實按、viewer 操作手感、分組 grid UI。
 | P2.5 Migration | ⏳ | |
 | P3 文字整合 | ⏳ | |
 | P4 加值 | ⏳ | |
