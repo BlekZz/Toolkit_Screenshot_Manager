@@ -213,3 +213,21 @@ describe('album grouping (HTTP)', () => {
     assert.equal((await send('POST', '/api/assets/albums', { ids: [] })).status, 400);
   });
 });
+
+describe('crop render under a long library path (Windows MAX_PATH)', () => {
+  test('ensureCrop writes the cache even when the full path exceeds 260 characters', async () => {
+    const { ensureCrop } = await import('../server/crops.mjs');
+    const root = tempDir('crop-longpath');
+    try {
+      const [src] = await makeImages(path.join(root, 'src'), 1, { width: 300, height: 200 });
+      const deep = path.join(root, ...Array.from({ length: 6 }, (_, i) => `deep-directory-segment-${i}-xxxxxxxxxx`), 'thumbs');
+      const sha = crypto.createHash('sha256').update(fs.readFileSync(src)).digest('hex');
+      assert.ok(path.join(deep, 'crops', sha.slice(0, 2), `${sha}_0_0_150x100.png`).length > 260, 'fixture must exceed MAX_PATH');
+      const r = await ensureCrop(deep, src, sha, { x: 0, y: 0, w: 0.5, h: 0.5 });
+      const meta = await sharp(fs.readFileSync(r.file)).metadata();
+      assert.deepEqual([meta.width, meta.height], [150, 100]);
+    } finally {
+      cleanup(root);
+    }
+  });
+});

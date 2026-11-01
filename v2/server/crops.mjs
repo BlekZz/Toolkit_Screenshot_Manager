@@ -29,7 +29,10 @@ export async function ensureCrop(thumbsDir, sourceFile, sha256, crop) {
   if (!fs.existsSync(out)) {
     fs.mkdirSync(path.dirname(out), { recursive: true });
     const tmp = `${out}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-    await sharp(sourceFile).rotate().extract(r).png().toFile(tmp);
+    // Encode to a buffer and let Node write it: Node handles Windows long paths (> MAX_PATH),
+    // libvips' own file writer does not (500 when the library lives under a deep directory).
+    const png = await sharp(sourceFile).rotate().extract(r).png().toBuffer();
+    fs.writeFileSync(tmp, png);
     fs.renameSync(tmp, out);
   }
   return { file: out, width: r.width, height: r.height };

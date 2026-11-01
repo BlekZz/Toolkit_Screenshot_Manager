@@ -317,7 +317,7 @@
   <div class="body">
     <section class="view">
       {#if id != null && detail && detail.id === id}
-        <CropStage bind:this={stage} assetId={id} width={detail.width} height={detail.height} {mode} {ratio} onnav={go} />
+        <CropStage bind:this={stage} assetId={id} width={detail.width} height={detail.height} {mode} {ratio} wholeAllowed={purpose === 'bundle'} onnav={go} />
       {:else if !ids.length}
         <div class="empty" data-testid="triage-empty">
           <p>這個來源已經沒有照片了。</p>

@@ -12,7 +12,7 @@
    * Geometry lives in lib/crop.js; this component only wires pointer events.
    * width / height = the asset's display (EXIF-oriented) size.
    */
-  let { assetId, width, height, mode = 'browse', ratio = 'free', onnav } = $props();
+  let { assetId, width, height, mode = 'browse', ratio = 'free', wholeAllowed = true, onnav } = $props();
 
   const MIN_ZOOM = 1;
   const MAX_ZOOM = 5;
@@ -180,7 +180,7 @@
             <i class="h nw"></i><i class="h ne"></i><i class="h sw"></i><i class="h se"></i>
           </div>
         {:else}
-          <div class="tip">拖曳框選範圍（不框選＝整張）</div>
+          <div class="tip">{wholeAllowed ? '拖曳框選範圍（不框選＝整張）' : '拖曳框選範圍（存 crop 必須框選）'}</div>
         {/if}
       </div>
     {/if}
