@@ -165,7 +165,7 @@ export function createCatalog(db) {
     if (parent_id != null) requireRow(q.tag, parent_id, 'parent tag');
     return tx(db, () => {
       let parent = parent_id == null ? null : Number(parent_id);
-      let created = false;
+      const createdIds = [];
       for (const [i, seg] of segs.entries()) {
         const existing = q.tagChild.get(parent ?? 0, seg);
         if (existing) { parent = existing.id; continue; }
@@ -173,10 +173,10 @@ export function createCatalog(db) {
         const { lastInsertRowid } = db.prepare('INSERT INTO tags (parent_id, name, color, description) VALUES (?, ?, ?, ?)')
           .run(parent, seg, last ? cleanColor(color) : null, last ? descr : null);
         parent = Number(lastInsertRowid);
-        created = true;
+        createdIds.push(parent);
       }
-      if (created) logEvent(db, 'tag.create', { id: parent, name });
-      return { ...q.tag.get(parent), created };
+      if (createdIds.length) logEvent(db, 'tag.create', { id: parent, name }, { op: 'tag.delete', ids: createdIds });
+      return { ...q.tag.get(parent), created: createdIds.length > 0 };
     });
   }
 
@@ -216,9 +216,13 @@ export function createCatalog(db) {
     return tx(db, () => {
       const tags = db.prepare(`SELECT * FROM tags WHERE id IN (${marks})`).all(...subtree);
       const links = db.prepare(`SELECT * FROM asset_tags WHERE tag_id IN (${marks})`).all(...subtree);
+      const cascaded = {};
+      for (const table of ['asset_suggestions', 'tag_actions', 'tag_matchers']) {
+        cascaded[table] = db.prepare(`SELECT * FROM ${table} WHERE tag_id IN (${marks}) ORDER BY id`).all(...subtree);
+      }
       db.prepare('DELETE FROM tags WHERE id = ?').run(tag.id); // children + links cascade
       logEvent(db, 'tag.delete', { id: tag.id, name: tag.name, subtree: subtree.length, links: links.length },
-        { op: 'tag.restore', tags, links });
+        { op: 'tag.restore', tags, links, ...cascaded });
       return { deleted_tags: subtree.length, removed_links: links.length };
     });
   }
@@ -233,7 +237,7 @@ export function createCatalog(db) {
     existingAssets(ids);
     return tx(db, () => {
       const ins = db.prepare("INSERT OR IGNORE INTO asset_tags (asset_id, tag_id, source, added_at) VALUES (?, ?, 'manual', ?)");
-      const del = db.prepare('DELETE FROM asset_tags WHERE asset_id = ? AND tag_id = ?');
+      const del = db.prepare('DELETE FROM asset_tags WHERE asset_id = ? AND tag_id = ? RETURNING source, added_at');
       const ts = now();
       let added = 0;
       let removed = 0;
@@ -241,7 +245,10 @@ export function createCatalog(db) {
       const undoRemove = [];
       for (const a of ids) {
         for (const t of addIds) if (ins.run(a, t, ts).changes) { added++; undoAdd.push([a, t]); }
-        for (const t of removeIds) if (del.run(a, t).changes) { removed++; undoRemove.push([a, t]); }
+        for (const t of removeIds) {
+          const row = del.get(a, t);
+          if (row) { removed++; undoRemove.push([a, t, row.source, row.added_at]); }
+        }
       }
       logEvent(db, 'tags.apply', { assets: ids.length, add: addIds, remove: removeIds, added, removed },
         { op: 'tags.apply', added: undoAdd, removed: undoRemove });
@@ -257,7 +264,7 @@ export function createCatalog(db) {
     if (parent_id != null) requireRow(q.folder, parent_id, 'parent folder');
     const { lastInsertRowid } = db.prepare('INSERT INTO album_folders (parent_id, name) VALUES (?, ?)')
       .run(parent_id == null ? null : Number(parent_id), cleanName(name, 'folder'));
-    logEvent(db, 'folder.create', { id: Number(lastInsertRowid), name });
+    logEvent(db, 'folder.create', { id: Number(lastInsertRowid), name }, { op: 'folder.delete', id: Number(lastInsertRowid) });
     return q.folder.get(Number(lastInsertRowid));
   }
 
@@ -272,16 +279,23 @@ export function createCatalog(db) {
       }
     }
     db.prepare('UPDATE album_folders SET name = ?, parent_id = ? WHERE id = ?').run(next.name, next.parent_id, f.id);
-    logEvent(db, 'folder.update', { id: f.id, ...next });
+    logEvent(db, 'folder.update', { id: f.id, ...next }, { op: 'folder.update', id: f.id, name: f.name, parent_id: f.parent_id });
     return q.folder.get(f.id);
   }
 
   /** Deletes a folder (and sub-folders); its albums move to the top level, never deleted. */
   function deleteFolder(id) {
     const f = requireRow(q.folder, id, 'folder');
-    db.prepare('DELETE FROM album_folders WHERE id = ?').run(f.id);
-    logEvent(db, 'folder.delete', { id: f.id, name: f.name });
-    return { deleted: true };
+    return tx(db, () => {
+      const subtree = q.folderSubtree.all(f.id).map((r) => r.id);
+      const marks = subtree.map(() => '?').join(',');
+      const folders = db.prepare(`SELECT * FROM album_folders WHERE id IN (${marks})`).all(...subtree);
+      const albums = db.prepare(`SELECT id, folder_id FROM albums WHERE folder_id IN (${marks})`).all(...subtree);
+      const smart = db.prepare(`SELECT id, folder_id FROM smart_albums WHERE folder_id IN (${marks})`).all(...subtree);
+      db.prepare('DELETE FROM album_folders WHERE id = ?').run(f.id);
+      logEvent(db, 'folder.delete', { id: f.id, name: f.name }, { op: 'folder.restore', folders, albums, smart });
+      return { deleted: true };
+    });
   }
 
   // ---- albums --------------------------------------------------------------
@@ -298,7 +312,7 @@ export function createCatalog(db) {
     if (folder_id != null) requireRow(q.folder, folder_id, 'folder');
     const { lastInsertRowid } = db.prepare('INSERT INTO albums (folder_id, name, created_at) VALUES (?, ?, ?)')
       .run(folder_id == null ? null : Number(folder_id), cleanName(name, 'album'), now());
-    logEvent(db, 'album.create', { id: Number(lastInsertRowid), name });
+    logEvent(db, 'album.create', { id: Number(lastInsertRowid), name }, { op: 'album.delete', id: Number(lastInsertRowid) });
     return q.album.get(Number(lastInsertRowid));
   }
 
@@ -351,11 +365,11 @@ export function createCatalog(db) {
     const al = requireRow(q.album, albumId, 'album');
     const ids = idList(assetIds);
     return tx(db, () => {
-      const del = db.prepare('DELETE FROM album_items WHERE album_id = ? AND asset_id = ? RETURNING position');
+      const del = db.prepare('DELETE FROM album_items WHERE album_id = ? AND asset_id = ? RETURNING position, added_at');
       const removed = [];
       for (const a of ids) {
         const row = del.get(al.id, a);
-        if (row) removed.push([a, row.position]);
+        if (row) removed.push([a, row.position, row.added_at]);
       }
       logEvent(db, 'album.remove', { album_id: al.id, requested: ids.length, removed: removed.length },
         { op: 'album.add', album_id: al.id, items: removed });
@@ -368,7 +382,8 @@ export function createCatalog(db) {
     const al = requireRow(q.album, albumId, 'album');
     const ids = idList(asset_ids);
     return tx(db, () => {
-      const order = db.prepare('SELECT asset_id FROM album_items WHERE album_id = ? ORDER BY position').all(al.id).map((r) => r.asset_id);
+      const before = db.prepare('SELECT asset_id, position FROM album_items WHERE album_id = ? ORDER BY position').all(al.id);
+      const order = before.map((r) => r.asset_id);
       const moving = new Set(ids);
       const inAlbum = new Set(order);
       const missing = ids.filter((id) => !inAlbum.has(id));
@@ -379,7 +394,8 @@ export function createCatalog(db) {
       rest.splice(at, 0, ...ids);
       const upd = db.prepare('UPDATE album_items SET position = ? WHERE album_id = ? AND asset_id = ?');
       rest.forEach((id, i) => upd.run(i + 1, al.id, id));
-      logEvent(db, 'album.reorder', { album_id: al.id, moved: ids.length });
+      logEvent(db, 'album.reorder', { album_id: al.id, moved: ids.length },
+        { op: 'album.reorder', album_id: al.id, positions: before.map((r) => [r.asset_id, r.position]) });
       return { ok: true };
     });
   }
@@ -400,7 +416,7 @@ export function createCatalog(db) {
     validateSmart(query);
     const { lastInsertRowid } = db.prepare('INSERT INTO smart_albums (folder_id, name, query_json, created_at) VALUES (?, ?, ?, ?)')
       .run(folder_id == null ? null : Number(folder_id), cleanName(name, 'smart album'), JSON.stringify(query), now());
-    logEvent(db, 'smart.create', { id: Number(lastInsertRowid), name });
+    logEvent(db, 'smart.create', { id: Number(lastInsertRowid), name }, { op: 'smart.delete', id: Number(lastInsertRowid) });
     return listSmart().find((s) => s.id === Number(lastInsertRowid));
   }
 
@@ -416,7 +432,8 @@ export function createCatalog(db) {
     if (folder_id !== undefined) next.folder_id = folder_id == null ? null : Number(folder_id);
     db.prepare('UPDATE smart_albums SET name = ?, query_json = ?, folder_id = ? WHERE id = ?')
       .run(next.name, next.query_json, next.folder_id, s.id);
-    logEvent(db, 'smart.update', { id: s.id, name: next.name });
+    logEvent(db, 'smart.update', { id: s.id, name: next.name },
+      { op: 'smart.update', id: s.id, name: s.name, query_json: s.query_json, folder_id: s.folder_id });
     return listSmart().find((x) => x.id === s.id);
   }
 
@@ -429,7 +446,7 @@ export function createCatalog(db) {
     const users = listSmart().filter((o) => o.id !== s.id && refersTo(o.query)).map((o) => o.name);
     if (users.length) throw bad(`smart album is used by: ${users.join(', ')}`, 409);
     db.prepare('DELETE FROM smart_albums WHERE id = ?').run(s.id);
-    logEvent(db, 'smart.delete', { id: s.id, name: s.name, query_json: s.query_json });
+    logEvent(db, 'smart.delete', { id: s.id, name: s.name, query_json: s.query_json }, { op: 'smart.restore', smart: s });
     return { deleted: true };
   }
 

@@ -85,7 +85,7 @@ export function createDecisions(db) {
     actionsFor: db.prepare('SELECT * FROM tag_actions WHERE tag_id = ? AND enabled = 1 ORDER BY id'),
     action: db.prepare('SELECT * FROM tag_actions WHERE id = ?'),
     event: db.prepare('SELECT * FROM events WHERE id = ?'),
-    undone: db.prepare("SELECT 1 FROM events WHERE action = 'suggestions.undo' AND json_extract(payload_json, '$.event_id') = ?"),
+    markUndone: db.prepare('UPDATE events SET undone_by = ? WHERE id = ? AND undone_by IS NULL'),
   };
 
   /** Full "a/b/c" path of a tag id. */
@@ -187,30 +187,40 @@ export function createDecisions(db) {
   function undoDecision(eventId) {
     const id = Number(eventId);
     if (!Number.isInteger(id) || id <= 0) throw bad('event_id must be a positive integer');
-    return tx(db, () => {
-      const ev = q.event.get(id);
-      if (!ev) throw bad('event not found', 404);
-      if (!['suggestions.accept', 'suggestions.reject'].includes(ev.action)) throw bad(`event #${id} is not a suggestion decision`);
-      if (q.undone.get(id)) throw bad(`event #${id} has already been undone`, 409);
-      const undo = JSON.parse(ev.undo_json ?? '{}');
-      const out = { statuses: 0, statuses_skipped: 0, tags_removed: 0, tags_kept: 0, album_items_removed: 0, albums_removed: 0, albums_kept: 0 };
-      const restore = db.prepare('UPDATE asset_suggestions SET status = ?, decided_at = NULL WHERE id = ? AND status = ?');
-      for (const [sid, prev, next] of undo.statuses ?? []) {
-        if (restore.run(prev, sid, next).changes) out.statuses++; else out.statuses_skipped++;
-      }
-      const delTag = db.prepare("DELETE FROM asset_tags WHERE asset_id = ? AND tag_id = ? AND source = 'ai'");
-      for (const [a, t] of undo.asset_tags ?? []) {
-        if (delTag.run(a, t).changes) out.tags_removed++; else out.tags_kept++;
-      }
-      const delItem = db.prepare('DELETE FROM album_items WHERE album_id = ? AND asset_id = ?');
-      for (const [al, a] of undo.album_items ?? []) out.album_items_removed += Number(delItem.run(al, a).changes);
-      for (const al of undo.albums_created ?? []) {
-        if (db.prepare('SELECT 1 FROM album_items WHERE album_id = ? LIMIT 1').get(al)) { out.albums_kept++; continue; }
-        out.albums_removed += Number(db.prepare('DELETE FROM albums WHERE id = ?').run(al).changes);
-      }
-      logEvent(db, 'suggestions.undo', { event_id: id, action: ev.action, ...out });
-      return { ...out, event_id: lastId(db) };
-    });
+    return tx(db, () => undoDecisionInTx(id));
+  }
+
+  /**
+   * undoDecision body for callers already inside a transaction (the generic
+   * undo engine). Logs its own `suggestions.undo` event and sets the decision
+   * event's `undone_by` to it.
+   *
+   * @param {number} id Event id of a suggestions.accept / suggestions.reject event.
+   */
+  function undoDecisionInTx(id) {
+    const ev = q.event.get(id);
+    if (!ev) throw bad('event not found', 404);
+    if (!['suggestions.accept', 'suggestions.reject'].includes(ev.action)) throw bad(`event #${id} is not a suggestion decision`);
+    if (ev.undone_by != null) throw bad(`event #${id} has already been undone`, 409);
+    const undo = JSON.parse(ev.undo_json ?? '{}');
+    const out = { statuses: 0, statuses_skipped: 0, tags_removed: 0, tags_kept: 0, album_items_removed: 0, albums_removed: 0, albums_kept: 0 };
+    const restore = db.prepare('UPDATE asset_suggestions SET status = ?, decided_at = NULL WHERE id = ? AND status = ?');
+    for (const [sid, prev, next] of undo.statuses ?? []) {
+      if (restore.run(prev, sid, next).changes) out.statuses++; else out.statuses_skipped++;
+    }
+    const delTag = db.prepare("DELETE FROM asset_tags WHERE asset_id = ? AND tag_id = ? AND source = 'ai'");
+    for (const [a, t] of undo.asset_tags ?? []) {
+      if (delTag.run(a, t).changes) out.tags_removed++; else out.tags_kept++;
+    }
+    const delItem = db.prepare('DELETE FROM album_items WHERE album_id = ? AND asset_id = ?');
+    for (const [al, a] of undo.album_items ?? []) out.album_items_removed += Number(delItem.run(al, a).changes);
+    for (const al of undo.albums_created ?? []) {
+      if (db.prepare('SELECT 1 FROM album_items WHERE album_id = ? LIMIT 1').get(al)) { out.albums_kept++; continue; }
+      out.albums_removed += Number(db.prepare('DELETE FROM albums WHERE id = ?').run(al).changes);
+    }
+    const undoId = logEvent(db, 'suggestions.undo', { event_id: id, action: ev.action, ...out });
+    q.markUndone.run(undoId, id);
+    return { ...out, event_id: undoId };
   }
 
   // ---- tag actions ---------------------------------------------------------
@@ -245,7 +255,8 @@ export function createDecisions(db) {
     db.prepare('INSERT INTO tag_actions (tag_id, kind, target, enabled, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(a.tag_id, a.kind, a.target, a.enabled, now());
     const created = q.action.get(lastId(db));
-    logEvent(db, 'tag_action.create', { id: created.id, tag_id: a.tag_id, kind: a.kind, target: a.target });
+    logEvent(db, 'tag_action.create', { id: created.id, tag_id: a.tag_id, kind: a.kind, target: a.target },
+      { op: 'tag_action.delete', action: created });
     return withPath(created);
   }
 
@@ -271,7 +282,7 @@ export function createDecisions(db) {
   }
 
   return {
-    listSuggestions, acceptSuggestions, rejectSuggestions, undoDecision,
+    listSuggestions, acceptSuggestions, rejectSuggestions, undoDecision, undoDecisionInTx,
     listTagActions, createTagAction, updateTagAction, deleteTagAction,
   };
 }

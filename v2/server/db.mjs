@@ -65,8 +65,9 @@ export const now = () => new Date().toISOString();
  * @param {string} action
  * @param {object} payload
  * @param {object|null} [undo]
+ * @returns {number} The new event id.
  */
 export function logEvent(db, action, payload, undo = null) {
-  db.prepare('INSERT INTO events (ts, actor, action, payload_json, undo_json) VALUES (?, ?, ?, ?, ?)')
-    .run(now(), 'user', action, JSON.stringify(payload), undo ? JSON.stringify(undo) : null);
+  return Number(db.prepare('INSERT INTO events (ts, actor, action, payload_json, undo_json) VALUES (?, ?, ?, ?, ?)')
+    .run(now(), 'user', action, JSON.stringify(payload), undo ? JSON.stringify(undo) : null).lastInsertRowid);
 }
