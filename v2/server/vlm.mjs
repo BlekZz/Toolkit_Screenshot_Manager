@@ -7,6 +7,10 @@ import { recordRun, suggestionWriter, tagIdByPath } from './suggestions.mjs';
 
 export const DEFAULT_MODEL = 'qwen3-vl:4b';
 const MAX_EDGE = 1280;
+const MAX_TOKENS = 768;
+/** Error code (and detail prefix) for model output that is not valid JSON. */
+export const BAD_OUTPUT = 'output';
+const RETRY_TEMPERATURE = 0.7;
 
 /**
  * Reads the current tag taxonomy that the VLM may suggest: every child of
@@ -106,10 +110,12 @@ export function toSuggestionItems(tax, answer) {
  *
  * @returns {Promise<{answer: object, ms: number}>}
  */
-export function ollamaClassify({ host = '127.0.0.1', port = 11434, model, prompt, schema, image, timeoutMs = 120000 }) {
+export function ollamaClassify({ host = '127.0.0.1', port = 11434, model, prompt, schema, image, timeoutMs = 120000, temperature = 0 }) {
   const t0 = Date.now();
   const body = JSON.stringify({
-    model, stream: false, format: schema, think: false, keep_alive: '10m', options: { temperature: 0 },
+    // num_predict caps runaway output: some images make the model emit thousands of whitespace
+    // tokens before/inside the JSON, ending in done_reason=length with empty or truncated content.
+    model, stream: false, format: schema, think: false, keep_alive: '10m', options: { temperature, num_predict: MAX_TOKENS },
     messages: [{ role: 'user', content: prompt, images: [image.toString('base64')] }],
   });
   return new Promise((resolve, reject) => {
@@ -118,12 +124,14 @@ export function ollamaClassify({ host = '127.0.0.1', port = 11434, model, prompt
       res.setEncoding('utf8');
       res.on('data', (c) => { data += c; });
       res.on('end', () => {
+        let j;
+        try { j = JSON.parse(data); } catch (err) { return reject(new Error(`bad ollama response: ${err.message}`)); }
+        if (res.statusCode !== 200) return reject(new Error(`ollama ${res.statusCode}: ${j.error || data.slice(0, 200)}`));
         try {
-          const j = JSON.parse(data);
-          if (res.statusCode !== 200) return reject(new Error(`ollama ${res.statusCode}: ${j.error || data.slice(0, 200)}`));
           resolve({ answer: JSON.parse(j.message?.content ?? ''), ms: Date.now() - t0 });
         } catch (err) {
-          reject(new Error(`bad ollama response: ${err.message}`));
+          // The server answered; the model's text is not valid JSON. Not a transport problem.
+          reject(Object.assign(new Error(`${BAD_OUTPUT}: ${err.message} (done_reason=${j.done_reason ?? '?'})`), { code: BAD_OUTPUT }));
         }
       });
     });
@@ -166,7 +174,14 @@ export async function runVlm(lib, {
     try {
       const image = await sharp(assetFilePath(lib, asset)).rotate()
         .resize({ width: MAX_EDGE, height: MAX_EDGE, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
-      const r = await classify({ model, prompt, schema, image, timeoutMs });
+      let r;
+      try {
+        r = await classify({ model, prompt, schema, image, timeoutMs });
+      } catch (err) {
+        if (err.code !== BAD_OUTPUT) throw err;
+        // Deterministic decoding loops on some images; one sampled retry usually escapes the loop.
+        r = await classify({ model, prompt, schema, image, timeoutMs, temperature: RETRY_TEMPERATURE });
+      }
       ms = r.ms;
       const conv = toSuggestionItems(tax, r.answer);
       if (!conv.ok) { status = 'error'; detail = `schema: ${conv.error}`; }
@@ -177,7 +192,7 @@ export async function runVlm(lib, {
     }
     recordRun(db, { assetId: asset.id, stage: 'vlm', model, promptHash, status, detail, ms });
     // Only transport failures (timeout, connection, HTTP) suggest a busy GPU or dead server; bad answers do not.
-    const transport = status === 'error' && !detail.startsWith('schema:');
+    const transport = status === 'error' && !detail.startsWith('schema:') && !detail.startsWith(`${BAD_OUTPUT}:`);
     if (status === 'ok') { result.ok++; if (ms != null) result.ms.push(ms); } else result.errors++;
     streak = transport ? streak + 1 : 0;
     onProgress?.({ done: result.ok + result.errors, total: result.total, ok: result.ok, errors: result.errors, last: { id: asset.id, status, detail, ms } });

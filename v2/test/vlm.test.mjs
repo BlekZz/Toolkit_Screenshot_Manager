@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { importFolder } from '../server/importer.mjs';
 import { openLibrary } from '../server/library.mjs';
 import { evaluate, importLabels, sampleForReview, tagIdByPath } from '../server/suggestions.mjs';
-import { buildPrompt, buildTaxonomy, runVlm, toSuggestionItems } from '../server/vlm.mjs';
+import { BAD_OUTPUT, buildPrompt, buildTaxonomy, runVlm, toSuggestionItems } from '../server/vlm.mjs';
 import { compareSources } from '../server/vlm-compare.mjs';
 import { cleanup, makeImages, tempDir } from './helpers.mjs';
 
@@ -102,6 +102,22 @@ describe('runVlm', () => {
     assert.equal(r.paused, null);
     assert.equal(r.errors, 4);
     assert.equal(lib.db.prepare("SELECT COUNT(*) AS n FROM suggestion_runs WHERE status = 'error' AND detail LIKE 'schema:%'").get().n, 4);
+  });
+
+  test('bad model output is retried once with sampling; persistent bad output does not pause', async () => {
+    const badOutput = () => Object.assign(new Error('output: Unexpected end of JSON input'), { code: BAD_OUTPUT });
+    const temps = [];
+    const r1 = await runVlm(lib, { model: 'm', classify: async ({ temperature }) => {
+      temps.push(temperature ?? 0);
+      if (!temperature) throw badOutput();
+      return { answer: answer(), ms: 5 };
+    } });
+    assert.equal(r1.ok, 4);
+    assert.deepEqual(temps, [0, 0.7, 0, 0.7, 0, 0.7, 0, 0.7]);
+
+    const r2 = await runVlm(lib, { model: 'm2', maxConsecutiveErrors: 2, classify: async () => { throw badOutput(); } });
+    assert.equal(r2.paused, null);
+    assert.equal(r2.errors, 4);
   });
 
   test('assetIds restricts the run; reason is sanitized', async () => {
