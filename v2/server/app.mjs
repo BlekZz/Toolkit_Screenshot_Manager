@@ -8,6 +8,8 @@ import { importFolder, validateSource } from './importer.mjs';
 import { ensureThumb, THUMB_SIZES } from './thumbs.mjs';
 import { createCatalog } from './catalog.mjs';
 import { registerCatalogRoutes } from './routes-catalog.mjs';
+import { createDecisions } from './decisions.mjs';
+import { registerDecisionRoutes } from './routes-decisions.mjs';
 
 const DIST_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 export const HOST = '127.0.0.1';
@@ -50,6 +52,7 @@ export async function buildApp({ libraryDir, logger = false }) {
 
   const catalog = createCatalog(lib.db);
   registerCatalogRoutes(app, catalog);
+  registerDecisionRoutes(app, createDecisions(lib.db));
 
   /** Ordered id list of the current view (optional ?q= filter); the grid virtualises over it. */
   app.get('/api/assets', async (req) => {
