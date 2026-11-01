@@ -2,6 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
 
+// libvips' file cache keeps rendered sources open; on Windows that blocks the user from
+// overwriting/editing originals in a referenced root while the server runs. Keep the
+// memory/op cache, drop open file handles.
+sharp.cache({ files: 0 });
+
 export const THUMB_SIZES = new Set([256, 1024]);
 const CONCURRENCY = 4;
 
