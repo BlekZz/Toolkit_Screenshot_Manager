@@ -33,7 +33,7 @@
   4. 名稱含 `"` 無法以字串語法查詢 → 引號內支援 `\"`、`\\` 跳脫。
   5. 測試缺口（6 個存活 mutation：facet DISTINCT、smart 深度上限、刪除引用防護、前端排除／tagMode／未歸類）→ 新增 `test/filter.test.mjs` 與 catalog 補測，6 個 mutation 全數轉紅；`npm test` 62/62。
 - 延後：Sprint §5.2「依 album 分組顯示」未實作（P1 QA 不要求）→ 排入 P2。智慧相簿引用已刪除的相簿／tag 時安靜回 0 張（可接受，P2 再評估提示）。
-| P2 Triage 與裁剪 | 🔄 2026-11-01 開工 | 拆三段：P2a 核心後端 ✅ ∥ P2b 原地引用 ✅ → P2c 前端（Triage、crop UI、分組顯示）進行中。見下方 P2 紀錄 |
+| P2 Triage 與裁剪 | 🔄 實作完成，待驗收 | P2a 核心後端 ✅、P2b 原地引用 ✅、P2c 前端 ✅（見下方 P2 紀錄）；待 fresh-context 獨立驗收＋Blake 以真實照片庫試用 |
 
 ### P2 紀錄（2026-11-01，後端）
 
@@ -44,6 +44,11 @@
   - crop 以 EXIF 轉正後座標為準，輸出 PNG 快取於 `thumbs/crops/`（刪 crop 後快取檔保留，清理機制待定）。
   - 主線裁定：Z 為全域 undo（任何視圖的最後一個操作）；沒有可撤銷時顯示提示（API 404）。
 - 真實資料庫副本試套 006＋007：`user_version` 7、foreign_key_check 0、六張主表筆數不變。
+- P2c 前端（commit `88ad72d`）：`Triage.svelte`、`CropStage.svelte`（照搬舊 viewer 縮放 1–5×、拖曳、圖上滾輪縮放／圖外滾輪換圖、裁剪框新建／移動／八向調整）、`GroupedGrid.svelte`、`RootsDialog.svelte`；純函式 `lib/crop.js`、`lib/triageKeys.js`、`lib/groups.js` 有 node 單元測試；`test/web-triage-smoke.test.mjs` 起真實 server 跑完整一輪鍵位 API。mutation 13／13；實作 agent 以 Playwright 全鍵位實測，主線另以 Playwright 重驗 Q→Enter→Z。
+  - 行為：Triage 來源＝目前篩選，無篩選時用「未歸類」（`NOT has:album AND NOT has:tag`）；每次動作後重新查詢，處理完的圖自然離開。比例鎖定碰邊時等比縮小（舊工具會截掉、比例跑掉）。
+  - 補後端缺口（commit `b37e114`）：tag／相簿套用回傳 `event_id`；無實際變動不記可撤銷事件（Z 不會撤到空操作），mutation 3／3。
+  - 主線裁定（可改）：W 未框選＝拒絕並提示；G＝有 open bundle 就結束、沒有就開新的；Z 還原後游標停在原處。
+  - 未做：Triage 鍵位自訂（§7「可自訂」）、進入 Triage 的快捷鍵、觸控、5 萬張分組 grid 效能。
 | P2.5 Migration | ⏳ | |
 | P3 文字整合 | ⏳ | |
 | P4 加值 | ⏳ | |
