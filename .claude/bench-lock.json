@@ -1,0 +1,14 @@
+{
+  "schema": "bench-lock/v1",
+  "items": {
+    "skill:modern-web-guidance": {
+      "source": "coldbench/skills/modern-web-guidance",
+      "source_repo": "git@github.com:BlekZz/Private_Blake_OS_Hub.git",
+      "bench_commit": "0c4a916375abc6171a440c82fabbb21c05a1e620",
+      "content_hash": "bl1:54c558bf4b9c722152a13e2becfcbbe5788d4ffe06ab58b9a4edcf7ba1319efe",
+      "pinned": false,
+      "acked": null,
+      "synced_at": "2026-11-13T00:41:23+08:00"
+    }
+  }
+}

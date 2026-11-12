@@ -72,3 +72,10 @@ Wrap-up（session 收尾 / 知識整合）時，project-local insight 依此表�
 | 已解 bug 的 fix pattern | 相關 Reference/schema 檔；並在 debug log 對應條目打 ✅ |
 | 零散技術筆記、跨 session 除錯脈絡 | `dev/tech-notes.md` |
 | 架構決策（含取捨理由） | `dev/decisions/ADR-NNN-<kebab-name>.md` |
+
+## Active Skills
+> Shared manifest — written by /init-skill (coldbench or upstream). Re-run to update / restore.
+
+| Skill | Source | Reason |
+|---|---|---|
+| modern-web-guidance | coldbench/skills/modern-web-guidance | 前端互動與 CSS 工作前檢索現行 web 平台做法（2026-11-13 A/B 測試後啟用） |
